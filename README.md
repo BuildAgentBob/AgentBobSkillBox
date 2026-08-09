@@ -1,73 +1,34 @@
-# UiPath VB.Netcode
+# SkillBox
 
-Selector-free web automation for UiPath: browser network captures are turned into **Invoke Code** VB.NET that replays HTTP (cookies, tokens, HTML forms, XHR). No UI selectors.
+Turns website traffic captures into **UiPath Invoke Code** (VB.NET) — no UI selectors.
 
-## Capturing traffic
+## What matters here
 
-Use **[BobScout Desktop](https://github.com/BuildAgentBob/BobScout.DesktopApp)** (Agent Bob / BobScout) to record website workflows and export `captured-api-workflow.json` (or equivalent). That JSON is the input for agents following **agent-bob-skills**.
+The main file is **[agent-bob-skills.md](agent-bob-skills.md)**.
 
-Typical BobScout flow: enter URL → Start recording → perform the action in Chromium → Stop → export the workflow/requests for this repo.
+That skill tells AI agents how to read a BobScout capture and write UiPath-ready VB.NET. Paste the result into an **Invoke Code** activity and wire the arguments.
 
-## For AI agents
+## Capture traffic
 
-| Resource | Who reads it | Purpose |
-|----------|--------------|---------|
-| [`agent-bob-skills.md`](agent-bob-skills.md) | AI agents | Instructions for converting capture JSON → UiPath Invoke Code VB.NET |
-| [`.cursor/skills/agent-bob-skills/SKILL.md`](.cursor/skills/agent-bob-skills/SKILL.md) | Cursor agents | Same skill, auto-discoverable |
-| `AxxessAutomation/`, `SandataAutomation/` | AI agents | **Examples** of finished Invoke Code — match style, patterns, and argument naming |
+Use **[BobScout Desktop](https://github.com/BuildAgentBob/BobScout.DesktopApp)**:
 
-When writing new VB.NET for UiPath:
+1. Enter the website URL  
+2. Start recording  
+3. Do the login or action in the browser  
+4. Stop and export the workflow JSON  
+5. Give that JSON to an agent with this skill  
 
-1. Follow **agent-bob-skills** (no `Imports`, fully qualified types, parameterize dynamics, scope to the user’s ask).
-2. **Read existing `.vb` files in this repo** for how code was written here (request helpers, cookie reuse, form/HTML parsing, error handling, Out args).
-3. Prefer the closest example folder (JSON/API vs HTML/WebForms) and adapt to the **current** site/capture—not copy vendor-specific URLs blindly.
+## Simple flow
 
-Humans: paste generated code into UiPath **Invoke Code** and wire In/Out arguments.
+```text
+BobScout capture JSON  →  agent-bob-skills  →  UiPath Invoke Code VB
+```
 
-## Repo layout
+## Repo (brief)
 
-| Path | Contents |
-|------|----------|
-| [`AxxessAutomation/`](AxxessAutomation/) | Okta → Identity → HomeCare session; claim/billing Invoke Code samples |
-| [`SandataAutomation/`](SandataAutomation/) | Sandata login + schedule/WebForms + submission Invoke Code samples |
-| [`agent-bob-skills.md`](agent-bob-skills.md) | Agent skill (source of truth for how to generate code) |
-| [`.cursor/skills/agent-bob-skills/`](.cursor/skills/agent-bob-skills/) | Cursor copy of the skill |
+| Item | What it is |
+|------|------------|
+| [agent-bob-skills.md](agent-bob-skills.md) | Skill for AI agents (start here) |
+| [Samples/](Samples/) | Optional example VB for agents to match style |
 
-## How the pipeline works
-
-1. Capture with [BobScout Desktop](https://github.com/BuildAgentBob/BobScout.DesktopApp) while doing login or an action; export the workflow JSON.
-2. Agent reads **agent-bob-skills** + **existing VB samples in this repo**.
-3. Agent emits Invoke Code VB scoped to the request (auth and/or post-login action).
-4. Robot runs steps sharing `CookieContainer` (and any tokens/headers the capture shows).
-
-Traffic may be HTML pages, form posts, XHR JSON/HTML, or OAuth redirects—not only REST APIs.
-
-## Invoke Code conventions (all samples)
-
-- No `Imports` / `Module` / `Class` / wrapping `Sub`
-- Fully qualified types (`System.Net.HttpWebRequest`, `Newtonsoft.Json…`)
-- UiPath variables as arguments by name
-- `Try` / `Catch` → `errorMessage`
-- Dynamics extracted at runtime or passed In—never hardcoded from captures
-
-## Typical arguments
-
-| Argument | Direction | Role |
-|----------|-----------|------|
-| `cookies` | In / InOut | Shared `System.Net.CookieContainer` |
-| `errorMessage` | Out | Failure text |
-| Credentials / business fields | In | username, ids, dates, … |
-| Tokens / session bags | In or Out | As required by the capture |
-| Response outs | Out | HTML, JSON, DataTable, flags |
-
-## Example sample chains
-
-**Axxess:** `OktaAxxessAuth` → `FinalizeAxxessAuth` → claim steps (`GenerateClaim`, `CreateClaim`, …).
-
-**Sandata:** `SandataLogin` → schedule/submission steps (`GetSchedule`, `PrepareSubmissionIntent`, …).
-
-## Requirements
-
-- UiPath with VB.NET Invoke Code
-- Newtonsoft.Json available to the process
-- Network access from the robot to target hosts
+This GitHub repo: https://github.com/BuildAgentBob/SkillBox

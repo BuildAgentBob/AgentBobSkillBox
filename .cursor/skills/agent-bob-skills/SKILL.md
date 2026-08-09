@@ -16,15 +16,30 @@ Turn real browser traffic into **UiPath Invoke Code** VB.NET that replays the
 same HTTP flow with `System.Net.HttpWebRequest` and a shared
 `System.Net.CookieContainer`. **No UiPath selectors / UI automation.**
 
-Works for **any website** (not limited to Axxess, Sandata, or any one vendor).
-Local folders like `AxxessAutomation/` and `SandataAutomation/` are optional
-style references only.
+Works for **any website**. Vendor folders under `Samples/` are style references only.
+
+## Where to look for example code
+
+Before writing new VB, **read existing samples** for style (requests, cookies,
+HTML/form parsing, args, error handling):
+
+| Location | Path |
+|----------|------|
+| **This repo (local)** | `Samples/` |
+| **GitHub** | https://github.com/BuildAgentBob/SkillBox/tree/main/Samples |
+
+Examples currently include:
+
+- `Samples/AxxessAutomation/` — JSON APIs, cookies, Bearer/custom headers, OAuth-style flows
+- `Samples/SandataAutomation/` — HTML pages, ASP.NET WebForms, form posts, session bags
+
+Pick the closest pattern to the capture, then adapt to the **current** site.
+Do not copy hostnames, IDs, or secrets from samples into new code.
 
 ## Capture source
 
 Traffic is recorded with **[BobScout Desktop](https://github.com/BuildAgentBob/BobScout.DesktopApp)**
-(Agent Bob Electron app — Playwright network capture, exportable workflow JSON).
-Accept the same JSON shape if exported from a related BobScout / extension tool.
+(exportable workflow JSON). Accept the same shape from related BobScout tools.
 
 ## Capture shape
 
@@ -66,17 +81,18 @@ Never assume every job starts with login.
 
 ## Workflow
 
-1. **Scope to the user ask** — only requests that implement that action.
-2. **Filter noise** — static `.js`/`.css`/images/fonts/maps/analytics, unless they contain tokens the flow needs.
-3. **Keep causality** — order matters: GET page (tokens) → POST → XHR → redirect.
-4. **Classify each kept call** — HTML / form / JSON / redirect / file; match `Content-Type` and `Accept` from the capture.
-5. **Infer session needs from the request** (not from a fixed vendor list):
+1. **Read `Samples/`** (local or GitHub) for coding style.
+2. **Scope to the user ask** — only requests that implement that action.
+3. **Filter noise** — static `.js`/`.css`/images/fonts/maps/analytics, unless they contain tokens the flow needs.
+4. **Keep causality** — order matters: GET page (tokens) → POST → XHR → redirect.
+5. **Classify each kept call** — HTML / form / JSON / redirect / file; match `Content-Type` and `Accept`.
+6. **Infer session needs from the request**:
    - Cookie header → `cookies` In/InOut
-   - `Authorization` → token In arg (name from header scheme)
-   - Custom headers that look like build/version/tenant IDs → In args extracted earlier or passed in
-6. **Parameterize all dynamics** — see below.
-7. **Emit Invoke Code body** — see Output contract.
-8. **Document args** — name, direction, producer step.
+   - `Authorization` → token In arg
+   - Custom session headers → In args extracted earlier or passed in
+7. **Parameterize all dynamics** — see below.
+8. **Emit Invoke Code body** — see Output contract.
+9. **Document args** — name, direction, producer step.
 
 ## Dynamic values (never hardcode)
 
@@ -86,10 +102,10 @@ Anything that changes per user, session, or run must be an **argument** or
 | Kind | Examples | Handling |
 |------|----------|----------|
 | Cookies / session | auth cookies, ASP.NET_SessionId | Shared `CookieContainer` |
-| Page antiforgery | `__VIEWSTATE`, `__EVENTVALIDATION`, CSRF, nonce | GET page each run; regex/parse; never paste capture values |
-| Tokens | Bearer, access_token, id_token, API keys in headers | Extract or In arg |
+| Page antiforgery | `__VIEWSTATE`, `__EVENTVALIDATION`, CSRF, nonce | GET page each run; regex/parse |
+| Tokens | Bearer, access_token, id_token | Extract or In arg |
 | OAuth / OIDC | code, state, PKCE, returnUrl | Generate or parse redirects/fragments |
-| Business keys | ids in query/body (schedule, claim, patient, …) | In args or discover via prior call |
+| Business keys | ids in query/body | In args or discover via prior call |
 | Credentials / inputs | username, password, dates, filters | In args |
 | Capture secrets | live passwords/JWTs in JSON | Never copy into source |
 
@@ -98,8 +114,8 @@ Anything that changes per user, session, or run must be an **argument** or
 - Parse HTML for hidden inputs, meta tags, inline JSON, data-* attributes
 - Parse JSON responses for ids/tokens needed by the next call
 - Follow `redirectUrl` / `Location` with the same cookie jar
-- For SPAs: if HTML has no useful URL, inspect linked JS or subsequent XHR in the capture for challenge/token endpoints
-- URL `#fragment` values (`#code=`, `#access_token=`) exist only client-side — read from Location/URL string before GET
+- For SPAs: if HTML has no useful URL, use later XHR/JS endpoints from the capture
+- URL `#fragment` values (`#code=`, `#access_token=`) — read from Location/URL string before GET
 
 ## Output contract (UiPath Invoke Code)
 
@@ -110,15 +126,15 @@ Anything that changes per user, session, or run must be an **argument** or
 - **Fully qualified types only** (`System.Net.HttpWebRequest`, `System.Text.RegularExpressions.Regex`, `Newtonsoft.Json.JsonConvert`, …)
 - Body starts with `Try` (or statements) and handles errors into `errorMessage`
 - Prefer `System.Net.HttpWebRequest` + `CookieContainer`
-- Mirror real headers: `Accept`, `Content-Type`, `Referer`, `Origin`, `User-Agent`, custom headers from the capture
-- `AllowAutoRedirect = False` when fragments or intermediate Set-Cookie hops matter; otherwise True is OK for simple HTML apps
+- Mirror real headers from the capture
+- `AllowAutoRedirect = False` when fragments or intermediate Set-Cookie hops matter
 - Do not log passwords or access tokens
 
 ### VB pitfalls
 
 - No bare `Return` on its own line inside multi-line lambdas
 - Do not split `As Some.Namespace.Type` across lines after `As`
-- When using short type names in examples from other projects, **rewrite to fully qualified** for Invoke Code
+- If a sample uses short type names, **rewrite to fully qualified** for Invoke Code
 
 ### Common arg names (adapt to the site)
 
@@ -127,11 +143,11 @@ Anything that changes per user, session, or run must be an **argument** or
 | `cookies` | In / InOut | Session |
 | `errorMessage` | Out | Failures |
 | Token / header outs | In or Out | Whatever the capture uses |
-| `sessionData` / form lists | InOut | WebForms hidden fields / rebuilt form pairs |
+| `sessionData` / form lists | InOut | WebForms / rebuilt form pairs |
 | Business fields | In | ids, dates, status codes |
 | HTML / JSON outs | Out | `*Html`, `*Response`, DataTables, flags |
 
-Match existing project naming when a folder already exists.
+Match naming used under `Samples/` when extending a similar flow.
 
 ## Per-request checklist
 
@@ -150,12 +166,3 @@ Match existing project naming when a folder already exists.
 2. Complete Invoke Code VB body
 3. Argument table (name, direction, source)
 4. Notes: prior step required, HTML vs JSON, ignored noise
-
-## Optional local references (style only)
-
-If present in the workspace, you may mirror patterns from:
-
-- JSON + Bearer/cookie APIs — e.g. `AxxessAutomation/`
-- HTML + WebForms + form posts — e.g. `SandataAutomation/`
-
-Always generalize to the **current capture’s host and flow**, not those product names.
