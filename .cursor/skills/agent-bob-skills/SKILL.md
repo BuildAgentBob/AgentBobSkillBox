@@ -1,11 +1,11 @@
 ---
 name: agent-bob-skills
 description: >-
-  Converts browser network captures (captured-api-workflow JSON, HAR-like logs)
+  Converts BobScout / Agent Bob network captures (captured-api-workflow JSON)
   into UiPath Invoke Code VB.NET for selector-free HTTP automation of any web
-  app. Use when the user attaches capture JSON, asks for Invoke Code,
-  HttpWebRequest VB, cookie/session replay, form/XHR/HTML automation, or
-  reverse-engineering login or post-login actions from traffic logs.
+  app. Use when the user attaches capture JSON from BobScout.DesktopApp, asks
+  for Invoke Code, HttpWebRequest VB, cookie/session replay, form/XHR/HTML
+  automation, or reverse-engineering login or post-login actions from traffic.
 ---
 
 # Agent Bob — Capture → UiPath Invoke Code (any web app)
@@ -20,9 +20,15 @@ Works for **any website** (not limited to Axxess, Sandata, or any one vendor).
 Local folders like `AxxessAutomation/` and `SandataAutomation/` are optional
 style references only.
 
+## Capture source
+
+Traffic is recorded with **[BobScout Desktop](https://github.com/BuildAgentBob/BobScout.DesktopApp)**
+(Agent Bob Electron app — Playwright network capture, exportable workflow JSON).
+Accept the same JSON shape if exported from a related BobScout / extension tool.
+
 ## Capture shape
 
-Typical export:
+Typical BobScout export:
 
 ```text
 exportedAt

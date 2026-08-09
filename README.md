@@ -2,6 +2,12 @@
 
 Selector-free web automation for UiPath: browser network captures are turned into **Invoke Code** VB.NET that replays HTTP (cookies, tokens, HTML forms, XHR). No UI selectors.
 
+## Capturing traffic
+
+Use **[BobScout Desktop](https://github.com/BuildAgentBob/BobScout.DesktopApp)** (Agent Bob / BobScout) to record website workflows and export `captured-api-workflow.json` (or equivalent). That JSON is the input for agents following **agent-bob-skills**.
+
+Typical BobScout flow: enter URL → Start recording → perform the action in Chromium → Stop → export the workflow/requests for this repo.
+
 ## For AI agents
 
 | Resource | Who reads it | Purpose |
@@ -29,8 +35,8 @@ Humans: paste generated code into UiPath **Invoke Code** and wire In/Out argumen
 
 ## How the pipeline works
 
-1. Capture browser traffic (`captured-api-workflow.json` or similar) while doing login or an action.
-2. Agent reads **agent-bob-skills** + **existing VB samples in the repo**.
+1. Capture with [BobScout Desktop](https://github.com/BuildAgentBob/BobScout.DesktopApp) while doing login or an action; export the workflow JSON.
+2. Agent reads **agent-bob-skills** + **existing VB samples in this repo**.
 3. Agent emits Invoke Code VB scoped to the request (auth and/or post-login action).
 4. Robot runs steps sharing `CookieContainer` (and any tokens/headers the capture shows).
 
