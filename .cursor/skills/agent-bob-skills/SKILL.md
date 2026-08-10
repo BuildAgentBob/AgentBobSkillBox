@@ -114,23 +114,31 @@ Never paste live passwords/JWTs from the capture into source or error text.
 
 Follow what the capture **actually** sends:
 
-- Cookies / HttpOnly cookies → `CookieContainer` (and/or token values in session bag)
+- Cookies / HttpOnly cookies → `System.Net.CookieContainer` (required persistence path)
 - Bearer → only if requests use `Authorization: Bearer …`
 - CSRF / custom headers → as captured
 - Do **not** assume a JWT implies Bearer if the app only uses cookies
 
-### Session bag convention
+### CookieContainer vs Session (critical)
 
-When reusable auth must leave the activity:
+Keep these as **separate** UiPath arguments — do not nest the jar inside the dictionary.
 
-- `out_Session As System.Collections.Generic.Dictionary(Of String, Object)`
-- Put **only useful keys** (e.g. `accessToken`, `refreshToken`, `csrfToken`, `cookieContainer`)
-- Do not dump every cookie/header by default
+| Argument | Type | Role |
+|----------|------|------|
+| `out_CookieContainer` / `io_CookieContainer` (or `cookies`) | `System.Net.CookieContainer` | Auth cookie jar. Login creates it; later actions take it In/InOut and attach it to every request. |
+| `out_Session` / `in_Session` | `Dictionary(Of String, Object)` | Optional **non-cookie** extras only (`baseUrl`, `csrfToken`, `buildDateIdentifier`, business ids, flags, …). |
 
-When a later action needs an existing session:
+When the capture authenticates with cookies (including HttpOnly JWT cookies):
 
-- `in_Session As System.Collections.Generic.Dictionary(Of String, Object)`
-- Read only keys required by that action
+1. Login must Out a real `CookieContainer` that already holds those cookies.
+2. Later Invoke Code must reuse that **same** container argument — do not extract
+   `accessToken` / `refreshToken` strings into `out_Session` and rebuild cookies.
+3. After each authenticated call, return the same container (Out or InOut) so
+   Set-Cookie rotations stay in the jar.
+4. Copy `in_Session` → `out_Session` only for extras; never put `CookieContainer`
+   (or raw token cookie values) into the session dictionary.
+
+See `Samples/Rockae/RockaeLogin.vb` and `Samples/SandataAutomation/` for the pattern.
 
 ## Headers
 
@@ -195,7 +203,7 @@ Console.WriteLine(responseBody)
 | Naming | Prefer `in_…` / `out_…` |
 | Errors | Always `out_errorMessage As String` — empty on success; set only on failure |
 | Inputs | Only what the marked action needs (`in_Email`, `in_RecordId`, …) |
-| Outputs | Only what UiPath needs next (`out_BatchNumber`, `out_RecordId`, `out_Session`, …) |
+| Outputs | Only what UiPath needs next (`out_CookieContainer`, `out_Session` extras, `out_BatchNumber`, …) |
 | Forbid by default | `out_StatusCode`, `out_LoginSuccess`, `out_CookieHeader`, `out_ResponseBody`, raw JSON dumps, profile “verification” calls not required by the marked action |
 
 Evaluate HTTP status **inside** the code. On failure: `Throw New System.Exception("…")`,
@@ -230,7 +238,7 @@ Essential requests in order (method + path + purpose).
 What was dropped and why (categories).
 
 ### 4. Authentication / Session
-Mechanism + what persists (`out_Session` / `in_Session` / cookies).
+Mechanism + what persists (`out_CookieContainer` / `io_CookieContainer` separately from `out_Session` extras).
 
 ### 5. Dynamic Values
 What is extracted vs taken as `in_…`.
