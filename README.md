@@ -1,4 +1,4 @@
-# SkillBox
+# Agent Bob SkillBox
 
 Turns website traffic captures into **UiPath Invoke Code** (VB.NET) — no UI selectors.
 
@@ -6,7 +6,7 @@ Turns website traffic captures into **UiPath Invoke Code** (VB.NET) — no UI se
 
 The main file is **[agent-bob-skills.md](agent-bob-skills.md)**.
 
-That skill tells AI agents how to read a BobScout capture and write UiPath-ready VB.NET. Paste the result into an **Invoke Code** activity and wire the arguments.
+Give an AI agent that skill plus a BobScout capture JSON. The agent discovers the **marked action** in the file and writes minimum Invoke Code for it.
 
 ## Capture traffic
 
@@ -14,21 +14,29 @@ Use **[BobScout Desktop](https://github.com/BuildAgentBob/BobScout.DesktopApp)**
 
 1. Enter the website URL  
 2. Start recording  
-3. Do the login or action in the browser  
+3. Do the action in the browser  
 4. Stop and export the workflow JSON  
 5. Give that JSON to an agent with this skill  
 
 ## Simple flow
 
 ```text
-BobScout capture JSON  →  agent-bob-skills  →  UiPath Invoke Code VB
+BobScout capture JSON  →  agent-bob-skills.md  →  UiPath Invoke Code VB
 ```
 
-## Repo (brief)
+## Suggested user prompt
+
+```text
+I attached a BobScout capture JSON.
+Follow https://github.com/BuildAgentBob/AgentBobSkillBox/blob/main/agent-bob-skills.md
+Automate the marked action in the JSON.
+```
+
+## Repo
 
 | Item | What it is |
 |------|------------|
 | [agent-bob-skills.md](agent-bob-skills.md) | Skill for AI agents (start here) |
 | [Samples/](Samples/) | Optional example VB for agents to match style |
 
-This GitHub repo: https://github.com/BuildAgentBob/SkillBox
+GitHub: https://github.com/BuildAgentBob/AgentBobSkillBox

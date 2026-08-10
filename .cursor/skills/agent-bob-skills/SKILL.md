@@ -4,165 +4,246 @@ description: >-
   Converts BobScout / Agent Bob network captures (captured-api-workflow JSON)
   into UiPath Invoke Code VB.NET for selector-free HTTP automation of any web
   app. Use when the user attaches capture JSON from BobScout.DesktopApp, asks
-  for Invoke Code, HttpWebRequest VB, cookie/session replay, form/XHR/HTML
-  automation, or reverse-engineering login or post-login actions from traffic.
+  for Invoke Code, HttpWebRequest/HttpClient VB, cookie/session replay,
+  form/XHR/HTML automation, or reverse-engineering a marked action from traffic.
 ---
 
 # Agent Bob — Capture → UiPath Invoke Code (any web app)
 
 ## Goal
 
-Turn real browser traffic into **UiPath Invoke Code** VB.NET that replays the
-same HTTP flow with `System.Net.HttpWebRequest` and a shared
-`System.Net.CookieContainer`. **No UiPath selectors / UI automation.**
+Turn BobScout network traffic into **UiPath Invoke Code** VB.NET that replays
+the **minimum reliable HTTP workflow** for the **marked action** in the JSON.
+No UiPath selectors / UI automation. Works for **any website**.
 
-Works for **any website**. Vendor folders under `Samples/` are style references only.
+## Source of truth
 
-## Where to look for example code
+1. **Attached capture JSON** — primary source. Discover the action from the file.
+2. **This skill** — coding and workflow rules.
+3. **`Samples/`** — style reference only (local or GitHub).
 
-Before writing new VB, **read existing samples** for style (requests, cookies,
-HTML/form parsing, args, error handling):
+Do **not** invent the workflow from casual chat wording when the JSON already
+marks an action (`actions[].name`, `description`, `order`, linked requests).
 
-| Location | Path |
-|----------|------|
-| **This repo (local)** | `Samples/` |
-| **GitHub** | https://github.com/BuildAgentBob/SkillBox/tree/main/Samples |
+| Samples location | Path |
+|------------------|------|
+| Local | `Samples/` |
+| GitHub | https://github.com/BuildAgentBob/AgentBobSkillBox/tree/main/Samples |
 
-Examples currently include:
-
-- `Samples/AxxessAutomation/` — JSON APIs, cookies, Bearer/custom headers, OAuth-style flows
-- `Samples/SandataAutomation/` — HTML pages, ASP.NET WebForms, form posts, session bags
-
-Pick the closest pattern to the capture, then adapt to the **current** site.
-Do not copy hostnames, IDs, or secrets from samples into new code.
+Examples: `Samples/AxxessAutomation/` (JSON/APIs/cookies/tokens),
+`Samples/SandataAutomation/` (HTML/WebForms/form posts). Adapt to the current
+site — do not copy hostnames, IDs, or secrets from samples.
 
 ## Capture source
 
-Traffic is recorded with **[BobScout Desktop](https://github.com/BuildAgentBob/BobScout.DesktopApp)**
-(exportable workflow JSON). Accept the same shape from related BobScout tools.
-
-## Capture shape
-
-Typical BobScout export:
+Recorded with **[BobScout Desktop](https://github.com/BuildAgentBob/BobScout.DesktopApp)**.
 
 ```text
 exportedAt
 session { tabUrl, requestCount, actionCount }
 actions[]
-  requests[]
+  id, name, description, order, requests[]
     url, method, type, tabUrl, timestamp
     requestHeaders[{ name, value }]
-    requestBody { type: raw|json|..., value }   # may be missing
+    requestBody { type, value }          # may be missing
     statusCode, responseHeaders, responseBody, mimeType
     authIndicators
 ```
 
-`type` / `mimeType` may be document, xhr, fetch, script, etc. **Do not require
-clean REST JSON APIs.** Meaningful traffic includes:
+## Discover the marked action first
 
-| Kind | Examples | How to automate |
-|------|----------|-----------------|
-| HTML document | login.aspx, schedule pages | GET page → parse hidden fields / tokens → POST form |
-| Form POST | `application/x-www-form-urlencoded` | Rebuild body; re-extract VIEWSTATE-style fields each run |
-| XHR / fetch JSON | `/api/...`, SPA backends | JSON serialize body; parse JSON response |
-| XHR HTML / text | partial HTML, grids | POST/GET; regex or parse HTML response |
-| Redirects | 302 Location, OAuth fragments | Manual redirect loop; preserve `#...` fragments |
-| Multipart | file uploads | Rebuild multipart boundary body when needed |
+Before coding, identify:
 
-If the capture only shows an HTML page load then a form post, that **is** the API.
+1. Marked action name/description in `actions[]`
+2. What that action is meant to accomplish
+3. Which requests **directly** perform it
+4. Which requests are prerequisites only
+5. Irrelevant browser/background traffic
+6. Exact request order and dependencies
+7. Dynamic vs static values
+8. Auth/session mechanism (cookies, Bearer, CSRF, etc.)
+9. Whether auth is the action itself or only a prerequisite
+10. UiPath inputs required / useful outputs to return
 
-## Modes (ask determines scope)
+**Authentication is not always the main action.** It may only unlock the marked
+business step. Automate what the JSON marked — not a generic “full login product.”
 
-- **Auth** — build login/SSO → Out `cookies` (+ any tokens/session bags later steps need)
-- **Action** — already logged in → replay only the action; In whatever those calls use
-- **Mixed** — prefer separate Invoke Code units unless user wants one block
+## Filter noise — minimum chain only
 
-Never assume every job starts with login.
+Ignore unless required for tokens/HTML parsing:
 
-## Workflow
+- CSS, JS bundles, fonts, images, icons
+- Analytics / telemetry / prefetch
+- Unrelated APIs, duplicates, background polling
 
-1. **Read `Samples/`** (local or GitHub) for coding style.
-2. **Scope to the user ask** — only requests that implement that action.
-3. **Filter noise** — static `.js`/`.css`/images/fonts/maps/analytics, unless they contain tokens the flow needs.
-4. **Keep causality** — order matters: GET page (tokens) → POST → XHR → redirect.
-5. **Classify each kept call** — HTML / form / JSON / redirect / file; match `Content-Type` and `Accept`.
-6. **Infer session needs from the request**:
-   - Cookie header → `cookies` In/InOut
-   - `Authorization` → token In arg
-   - Custom session headers → In args extracted earlier or passed in
-7. **Parameterize all dynamics** — see below.
-8. **Emit Invoke Code body** — see Output contract.
-9. **Document args** — name, direction, producer step.
+Reproduce the **smallest reliable** request sequence that performs the marked action.
+
+Meaningful traffic includes HTML documents, form posts, XHR JSON/HTML, redirects
+(with `#fragment` tokens), and multipart — not only REST JSON.
+
+## Modes
+
+- **Auth marked** — login/SSO → return session useful to later steps
+- **Business action marked** — replay that action; take `in_Session` / cookies if needed
+- **Mixed capture** — prefer separate Invoke Code units unless user wants one block
 
 ## Dynamic values (never hardcode)
 
-Anything that changes per user, session, or run must be an **argument** or
-**extracted at runtime** from a previous response in the same flow.
+Extract from earlier responses or expose as `in_…` args:
 
-| Kind | Examples | Handling |
-|------|----------|----------|
-| Cookies / session | auth cookies, ASP.NET_SessionId | Shared `CookieContainer` |
-| Page antiforgery | `__VIEWSTATE`, `__EVENTVALIDATION`, CSRF, nonce | GET page each run; regex/parse |
-| Tokens | Bearer, access_token, id_token | Extract or In arg |
-| OAuth / OIDC | code, state, PKCE, returnUrl | Generate or parse redirects/fragments |
-| Business keys | ids in query/body | In args or discover via prior call |
-| Credentials / inputs | username, password, dates, filters | In args |
-| Capture secrets | live passwords/JWTs in JSON | Never copy into source |
+| Kind | Examples |
+|------|----------|
+| Session | cookies, session ids |
+| Antiforgery | VIEWSTATE, CSRF, nonce |
+| Tokens | access/refresh, Bearer, API keys |
+| OAuth | code, state, PKCE, returnUrl |
+| Business ids | record, batch, user, job, document ids |
+| Inputs | email, password, dates, filters |
+
+Never paste live passwords/JWTs from the capture into source or error text.
 
 ### Discovery over hardcoding
 
-- Parse HTML for hidden inputs, meta tags, inline JSON, data-* attributes
-- Parse JSON responses for ids/tokens needed by the next call
-- Follow `redirectUrl` / `Location` with the same cookie jar
-- For SPAs: if HTML has no useful URL, use later XHR/JS endpoints from the capture
-- URL `#fragment` values (`#code=`, `#access_token=`) — read from Location/URL string before GET
+- Parse HTML for hidden inputs / inline JSON
+- Parse JSON for ids/tokens needed next
+- Follow `Location` / `redirectUrl` with the same cookie jar
+- Read `#code=` / `#access_token=` from URL/Location **before** GET (fragments are not sent to the server)
+- SPA login with no URL in HTML → use challenge/token XHR from the capture or linked JS
 
-## Output contract (UiPath Invoke Code)
+## Authentication / session
 
-**Critical:** Runs inside UiPath **Invoke Code**.
+Follow what the capture **actually** sends:
+
+- Cookies / HttpOnly cookies → `CookieContainer` (and/or token values in session bag)
+- Bearer → only if requests use `Authorization: Bearer …`
+- CSRF / custom headers → as captured
+- Do **not** assume a JWT implies Bearer if the app only uses cookies
+
+### Session bag convention
+
+When reusable auth must leave the activity:
+
+- `out_Session As System.Collections.Generic.Dictionary(Of String, Object)`
+- Put **only useful keys** (e.g. `accessToken`, `refreshToken`, `csrfToken`, `cookieContainer`)
+- Do not dump every cookie/header by default
+
+When a later action needs an existing session:
+
+- `in_Session As System.Collections.Generic.Dictionary(Of String, Object)`
+- Read only keys required by that action
+
+## Headers
+
+Reproduce only headers the server needs (`Accept`, `Content-Type`, `Origin`,
+`Referer`, `Authorization`, CSRF, app-specific).
+
+Do **not** copy browser chrome unless proven required:
+
+`sec-ch-ua*`, `sec-fetch-*`, `priority`, pseudo-headers (`:authority`, …),
+redundant `Content-Length` (let the client set it).
+
+## UiPath Invoke Code — output contract
+
+**Critical:** code runs inside **Invoke Code**.
 
 - **No** `Imports`, `Option`, `Module`, `Class`, `Namespace`, wrapping `Sub`/`Function`
-- Arguments = UiPath variables by name (In / Out / InOut)
-- **Fully qualified types only** (`System.Net.HttpWebRequest`, `System.Text.RegularExpressions.Regex`, `Newtonsoft.Json.JsonConvert`, …)
-- Body starts with `Try` (or statements) and handles errors into `errorMessage`
-- Prefer `System.Net.HttpWebRequest` + `CookieContainer`
-- Mirror real headers from the capture
-- `AllowAutoRedirect = False` when fragments or intermediate Set-Cookie hops matter
-- Do not log passwords or access tokens
+- Fully qualified types
+- Prefer stack used in `Samples/` (`System.Net.HttpWebRequest` + `CookieContainer`).
+  `System.Net.Http.HttpClient` + `HttpClientHandler` + `CookieContainer` is OK if
+  consistent and easier for the flow — do not mix styles randomly
+- Avoid `Return` mid-flow for control (use `If`/`Else`/`Throw`); final errors via Catch
+- Do not log passwords or tokens
 
-### VB pitfalls
+### Logging (required)
 
-- No bare `Return` on its own line inside multi-line lambdas
-- Do not split `As Some.Namespace.Type` across lines after `As`
-- If a sample uses short type names, **rewrite to fully qualified** for Invoke Code
+Add `Console.WriteLine(...)` at **important steps** so UiPath job logs show progress.
+Agents often omit this — do not.
 
-### Common arg names (adapt to the site)
+Log at least:
 
-| Arg | Direction | Use |
-|-----|-----------|-----|
-| `cookies` | In / InOut | Session |
-| `errorMessage` | Out | Failures |
-| Token / header outs | In or Out | Whatever the capture uses |
-| `sessionData` / form lists | InOut | WebForms / rebuilt form pairs |
-| Business fields | In | ids, dates, status codes |
-| HTML / JSON outs | Out | `*Html`, `*Response`, DataTables, flags |
+- Start of the marked action
+- Each essential HTTP call (method + path/purpose), e.g. `"POST /api/auth/login..."`
+- Successful extraction of a dynamic value (name only — not secret values)
+- Success completion of the action
+- On failure, rely on `out_errorMessage` (optional short Console line without secrets)
 
-Match naming used under `Samples/` when extending a similar flow.
+**Never** write to the console:
 
-## Per-request checklist
+- passwords, access/refresh tokens, full cookie headers, Authorization values
+- full response bodies that may contain PII/secrets
 
-- [ ] Method + URL (template dynamic segments)
-- [ ] Document / xhr / form / json?
-- [ ] Auth: cookies / bearer / custom headers
-- [ ] Body encoding matches capture
-- [ ] Must re-GET page for fresh hidden fields?
-- [ ] Redirect / fragment handling?
-- [ ] What to parse into Out args?
-- [ ] Depends on prior Invoke Code outs?
+Good:
 
-## Deliverable
+```vb
+Console.WriteLine("Starting marked action: Login")
+Console.WriteLine("POST /api/auth/login")
+Console.WriteLine("Authentication cookies received.")
+Console.WriteLine("Login completed successfully.")
+```
 
-1. Short HTTP chain summary (bullets)
-2. Complete Invoke Code VB body
-3. Argument table (name, direction, source)
-4. Notes: prior step required, HTML vs JSON, ignored noise
+Bad:
+
+```vb
+Console.WriteLine("token=" & accessToken)
+Console.WriteLine(responseBody)
+```
+
+### Argument policy (strict — avoid fluff)
+
+| Rule | Detail |
+|------|--------|
+| Naming | Prefer `in_…` / `out_…` |
+| Errors | Always `out_errorMessage As String` — empty on success; set only on failure |
+| Inputs | Only what the marked action needs (`in_Email`, `in_RecordId`, …) |
+| Outputs | Only what UiPath needs next (`out_BatchNumber`, `out_RecordId`, `out_Session`, …) |
+| Forbid by default | `out_StatusCode`, `out_LoginSuccess`, `out_CookieHeader`, `out_ResponseBody`, raw JSON dumps, profile “verification” calls not required by the marked action |
+
+Evaluate HTTP status **inside** the code. On failure: `Throw New System.Exception("…")`,
+then `Catch` → `out_errorMessage = ex.Message` (no secrets in the message).
+
+```vb
+Try
+    ' minimum API workflow for the marked action
+Catch ex As System.Exception
+    out_errorMessage = ex.Message
+End Try
+```
+
+## Workflow checklist
+
+1. Read `Samples/` for style.
+2. Identify marked action from JSON.
+3. Build minimum request chain + dynamics list.
+4. Choose args per strict policy.
+5. Emit complete Invoke Code body.
+6. Document args table.
+
+## Deliverable format (always)
+
+### 1. Captured Action
+Name + description from JSON.
+
+### 2. Required API Flow
+Essential requests in order (method + path + purpose).
+
+### 3. Ignored Traffic
+What was dropped and why (categories).
+
+### 4. Authentication / Session
+Mechanism + what persists (`out_Session` / `in_Session` / cookies).
+
+### 5. Dynamic Values
+What is extracted vs taken as `in_…`.
+
+### 6. UiPath Arguments
+
+| Direction | Argument | Type | Purpose |
+|-----------|----------|------|---------|
+
+### 7. Complete VB.NET Invoke Code
+Full body, not fragments. Must include `Console.WriteLine` progress logs (no secrets).
+
+### 8. Result
+Success outs vs `out_errorMessage` on failure.
+
+If the capture lacks data for a required step, **say what is missing** — do not invent it.
