@@ -1,7 +1,27 @@
-' Opens EditProviderPlanOfCare from planOfCareId + assessmentId, accepts unsigned
-' ProvidersServices cards with anticipatedStartDate and a PNG from signaturePngPath,
-' syncs matching Services[i] signature/start fields, clears delay/decline, then
-' POSTs Save & Close. cookies In/Out; errorMessage Out. Throws on failure.
+' ============================================================
+' ILLINOIS AGINGCARES — Edit Provider Plan of Care (Accept + Sign)
+' UiPath Invoke Code - VB.NET
+'
+' Marked action:
+'   GET  .../EditProviderPlanOfCare/{id}?AssessmentId=...
+'   Accept each ProvidersServices[i] card (In Home, etc.)
+'   Set AnticipatedStartDate + ProviderSignature (PNG as data URL)
+'   POST Save & Close (Issaveclose=true) -> 302 ProvidersIndex
+'
+' IN:
+'   planOfCareId              As String   ' e.g. "44628"
+'   assessmentId              As String   ' e.g. "151483"
+'   anticipatedStartDate      As String   ' e.g. "10/07/2026" (mm/dd/yyyy)
+'   signaturePngPath          As String   ' local .png path
+'
+' IN/OUT:
+'   cookies                   As System.Net.CookieContainer
+'
+' OUT:
+'   errorMessage              As String
+'
+' Local Dim: responseHtml, statusCode, finalUrl, serviceCount, success
+' ============================================================
 
 Dim responseHtml As String = ""
 Dim statusCode As Integer = 0
@@ -12,10 +32,7 @@ Dim success As Boolean = False
 Try
     errorMessage = ""
 
-    Console.WriteLine("=== AgingCares EditProviderPlanOfCare ===")
-
     If cookies Is Nothing Then
-        Console.WriteLine("ABORT: cookies CookieContainer is Nothing — run AgingCaresLogin first.")
         Throw New System.Exception(
             "cookies CookieContainer is required."
         )
@@ -30,26 +47,22 @@ Try
     Dim pngPath As String = If(signaturePngPath, "").Trim()
 
     If String.IsNullOrWhiteSpace(pocId) Then
-        Console.WriteLine("ABORT: planOfCareId is missing.")
         Throw New System.Exception("planOfCareId is required.")
     End If
 
     If String.IsNullOrWhiteSpace(assessId) Then
-        Console.WriteLine("ABORT: assessmentId is missing.")
         Throw New System.Exception("assessmentId is required.")
     End If
 
     If String.IsNullOrWhiteSpace(startDate) Then
-        Console.WriteLine("ABORT: anticipatedStartDate is missing.")
         Throw New System.Exception("anticipatedStartDate is required (mm/dd/yyyy).")
     End If
 
     If String.IsNullOrWhiteSpace(pngPath) Then
-        Console.WriteLine("ABORT: signaturePngPath is missing.")
         Throw New System.Exception("signaturePngPath is required.")
     End If
+
     If Not System.IO.File.Exists(pngPath) Then
-        Console.WriteLine("ABORT: signature PNG file not found.")
         Throw New System.Exception("signature PNG not found: " & pngPath)
     End If
 
@@ -58,11 +71,7 @@ Try
         "data:image/png;base64," &
         System.Convert.ToBase64String(bytes)
 
-    Console.WriteLine(
-        "Signature PNG loaded | bytes=" & bytes.Length.ToString() &
-        " | dataUrlChars=" & dataUrl.Length.ToString()
-    )
-    Console.WriteLine("Inputs OK | planOfCareId set | assessmentId set | startDateSet=True")
+    Console.WriteLine("Starting marked action: AgingCares EditProviderPlanOfCare")
 
     System.Net.ServicePointManager.SecurityProtocol =
         System.Net.SecurityProtocolType.Tls12
@@ -73,6 +82,7 @@ Try
     Catch
     End Try
     System.Net.ServicePointManager.Expect100Continue = False
+
 
     Dim NormalizeUrl As Func(Of String, String) =
         Function(u As String) As String
@@ -252,10 +262,10 @@ Try
         Of System.Collections.Generic.Dictionary(Of String, String),
         String
     ) =
-        Function(formFields As System.Collections.Generic.Dictionary(Of String, String))
+        Function(fieldMap)
             Return String.Join(
                 "&",
-                formFields.Select(
+                fieldMap.Select(
                     Function(kvp)
                         Return System.Net.WebUtility.UrlEncode(kvp.Key) &
                                "=" &
@@ -331,12 +341,8 @@ Try
                 resp = CType(req.GetResponse(), System.Net.HttpWebResponse)
             Catch webEx As System.Net.WebException
                 If webEx.Response Is Nothing Then
-                    Console.WriteLine(method & " failed with no HTTP response: " & webEx.Message)
                     Throw
                 End If
-                Console.WriteLine(
-                    method & " returned error status (will still read body): " & webEx.Message
-                )
                 resp = CType(webEx.Response, System.Net.HttpWebResponse)
             End Try
 
@@ -364,18 +370,7 @@ Try
                         )
                 End If
 
-                Dim landedAuth As Boolean =
-                    respUrl.IndexOf("/adfs/", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
-                    respUrl.IndexOf("/CMS/SP2/", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
-                    locAbs.IndexOf("/adfs/", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
-                    locAbs.IndexOf("/CMS/SP2/", StringComparison.OrdinalIgnoreCase) >= 0
-
-                Console.WriteLine(
-                    method & " -> HTTP " & status.ToString() &
-                    " | bodyChars=" & text.Length.ToString() &
-                    " | hasRedirect=" & (Not String.IsNullOrWhiteSpace(locAbs)).ToString() &
-                    " | authPage=" & landedAuth.ToString()
-                )
+                Console.WriteLine(method & " " & url & " -> HTTP " & status.ToString())
 
                 Return New System.Tuple(Of String, String, Integer, String)(
                     text,
@@ -392,8 +387,7 @@ Try
         pocId &
         "?AssessmentId=" & System.Uri.EscapeDataString(assessId)
 
-    Console.WriteLine("Built EditProviderPlanOfCare GET from planOfCareId + assessmentId.")
-    Console.WriteLine("GET EditProviderPlanOfCare form...")
+    Console.WriteLine("GET EditProviderPlanOfCare/" & pocId)
 
     Dim getResult =
         SendRequest(
@@ -409,40 +403,32 @@ Try
 
     If statusCode <> 200 Then
         Throw New System.Exception(
-            "EditProviderPlanOfCare GET failed. HTTP " & statusCode.ToString()
-        )
-    End If
-
-    If finalUrl.IndexOf("/adfs/", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
-       finalUrl.IndexOf("/CMS/SP2/", StringComparison.OrdinalIgnoreCase) >= 0 Then
-        Console.WriteLine("WARN: landed on auth page — login session likely missing/expired.")
-        Throw New System.Exception(
-            "EditProviderPlanOfCare redirected to auth. Session cookies are missing or expired."
+            "EditProviderPlanOfCare GET failed. HTTP " & statusCode.ToString() &
+            " Url=" & finalUrl
         )
     End If
 
     If responseHtml.IndexOf("EditProviderPlanOfCare", StringComparison.OrdinalIgnoreCase) < 0 AndAlso
        responseHtml.IndexOf("ProvidersServices", StringComparison.OrdinalIgnoreCase) < 0 Then
-        Console.WriteLine("FAIL: page HTML missing EditProviderPlanOfCare / ProvidersServices markers.")
         Throw New System.Exception(
             "EditProviderPlanOfCare page HTML did not contain expected form fields."
         )
     End If
 
-    Console.WriteLine("Edit form HTML received. Extracting fields...")
 
     Dim fields = ExtractFormFields(responseHtml)
 
     If fields.Count = 0 Then
-        Console.WriteLine("FAIL: zero form fields extracted.")
         Throw New System.Exception("No form fields extracted from EditProviderPlanOfCare HTML.")
     End If
 
-    Console.WriteLine("Form fields extracted: " & fields.Count.ToString())
-
-    ' Ensure core ids from Invoke args
-    fields("Id") = pocId
-    fields("AssessmentId") = assessId
+    ' Ensure core ids
+    If Not String.IsNullOrWhiteSpace(pocId) Then
+        fields("Id") = pocId
+    End If
+    If Not String.IsNullOrWhiteSpace(assessId) Then
+        fields("AssessmentId") = assessId
+    End If
 
     fields("Issaveclose") = "true"
 
@@ -458,17 +444,7 @@ Try
     Dim signatureDate As String =
         System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
 
-    ' ServiceStartDate on agreement rows often uses a full datetime
-    Dim serviceStartDateValue As String = startDate
-    Try
-        Dim parsedStart As System.DateTime
-        If System.DateTime.TryParse(startDate, parsedStart) Then
-            serviceStartDateValue = parsedStart.ToString("M/d/yyyy") & " 12:00:00 AM"
-        End If
-    Catch
-    End Try
-
-    ' Discover ProvidersServices card indexes (acceptance cards only — not all Services[])
+    ' Discover service card indexes: ProvidersServices[n].Id
     Dim indexSet As New System.Collections.Generic.SortedSet(Of Integer)()
     For Each key As String In fields.Keys
         Dim im As System.Text.RegularExpressions.Match =
@@ -482,6 +458,7 @@ Try
         End If
     Next
 
+    ' Also scan HTML if dictionary missed some
     Dim htmlIndexMatches As System.Text.RegularExpressions.MatchCollection =
         System.Text.RegularExpressions.Regex.Matches(
             responseHtml,
@@ -493,58 +470,21 @@ Try
     Next
 
     If indexSet.Count = 0 Then
-        Console.WriteLine("This document might have already been updated")
-	Else
+        Throw New System.Exception(
+            "No ProvidersServices[i] cards found on the Plan of Care page."
+        )
+    End If
 
     serviceCount = indexSet.Count
-    Dim acceptedCount As Integer = 0
-    Dim skippedSigned As Integer = 0
-    Dim servicesSynced As Integer = 0
-
-    Console.WriteLine(
-        "ProvidersServices cards found: " & serviceCount.ToString() &
-        " (will skip already-signed; sync Services[i] by same index)."
-    )
+    Console.WriteLine("ProvidersServices cards found: " & serviceCount.ToString())
 
     For Each idx As Integer In indexSet
         Dim prefix As String = "ProvidersServices[" & idx.ToString() & "]"
 
-        Dim existingSig As String = ""
-        Dim existingSigDate As String = ""
-        Dim existingAccept As String = ""
-        If fields.ContainsKey(prefix & ".ProviderSignature") Then
-            existingSig = If(fields(prefix & ".ProviderSignature"), "").Trim()
-        End If
-        If fields.ContainsKey(prefix & ".ProviderSignatureDate") Then
-            existingSigDate = If(fields(prefix & ".ProviderSignatureDate"), "").Trim()
-        End If
-        If fields.ContainsKey(prefix & ".Accept") Then
-            existingAccept = If(fields(prefix & ".Accept"), "").Trim()
-        End If
-
-        Dim alreadySigned As Boolean =
-            (existingSig.Length > 0 AndAlso
-             existingSig.IndexOf("data:image/", StringComparison.OrdinalIgnoreCase) >= 0) OrElse
-            Not String.IsNullOrWhiteSpace(existingSigDate) OrElse
-            existingAccept.Equals("True", StringComparison.OrdinalIgnoreCase)
-
-        If alreadySigned Then
-            skippedSigned += 1
-            Continue For
-        End If
-
         fields(prefix & ".Accept") = "True"
         fields(prefix & ".AnticipatedStartDate") = startDate
-        fields(prefix & ".ServiceStartDate") = serviceStartDateValue
 
-        ' Clear delay / decline so accept path does not leave null-ish reasons
-        fields(prefix & ".ParticipantDelay") = "false"
-        fields(prefix & ".ParticipantDelayExplanation") = ""
-        fields(prefix & ".DelayReasonId") = "0"
-        fields(prefix & ".DeclineReasonId") = "0"
-        fields(prefix & ".DeclineReasonOther") = ""
-
-        ' Signature on ProvidersServices card
+        ' Signature (PNG as data URL) — same image on every card you accept
         fields(prefix & ".ProviderSignature") = dataUrl
         fields(prefix & ".ProviderSignatureDate") = signatureDate
 
@@ -553,84 +493,31 @@ Try
         End If
         If Not String.IsNullOrWhiteSpace(currentUserName) Then
             fields(prefix & ".ProviderSignatureUserName") = currentUserName
-        Else
-            fields(prefix & ".ProviderSignatureUserName") = ""
         End If
 
-        ' Sync matching Services[i] (data-service index maps PS[i] -> Services[i])
-        Dim svcPrefix As String = "Services[" & idx.ToString() & "]"
-        Dim psProviderName As String = ""
-        If fields.ContainsKey(prefix & ".ProviderName") Then
-            psProviderName = If(fields(prefix & ".ProviderName"), "").Trim()
+        ' Ensure ParticipantDelay posts as false if not set
+        If Not fields.ContainsKey(prefix & ".ParticipantDelay") Then
+            fields(prefix & ".ParticipantDelay") = "false"
         End If
 
-        Dim svcExists As Boolean =
-            fields.ContainsKey(svcPrefix & ".ProviderSignature") OrElse
-            fields.ContainsKey(svcPrefix & ".ProviderName") OrElse
-            fields.ContainsKey(svcPrefix & ".ServiceTypeId")
-
-        Dim nameOk As Boolean = True
-        If svcExists AndAlso
-           Not String.IsNullOrWhiteSpace(psProviderName) AndAlso
-           fields.ContainsKey(svcPrefix & ".ProviderName") Then
-
-            Dim svcName As String = If(fields(svcPrefix & ".ProviderName"), "").Trim()
-            If Not String.IsNullOrWhiteSpace(svcName) AndAlso
-               Not svcName.Equals(psProviderName, StringComparison.OrdinalIgnoreCase) Then
-                nameOk = False
-                Console.WriteLine(
-                    "WARN: Services[" & idx.ToString() & "] ProviderName mismatch — " &
-                    "skipping Services sync for this card index."
-                )
-            End If
-        End If
-
-        If svcExists AndAlso nameOk Then
-            fields(svcPrefix & ".ProviderSignature") = dataUrl
-            fields(svcPrefix & ".ProviderSignatureDate") = signatureDate
-            fields(svcPrefix & ".ServiceStartDate") = serviceStartDateValue
-            servicesSynced += 1
-        End If
-
-        acceptedCount += 1
+        Console.WriteLine(
+            "Accept card " & idx.ToString() &
+            " | AnticipatedStartDate=" & startDate &
+            " | SignatureDate=" & signatureDate
+        )
     Next
 
-    If acceptedCount = 0 Then
-        Console.WriteLine(
-            "FAIL: no unsigned ProvidersServices cards to accept " &
-            "(found=" & serviceCount.ToString() &
-            ", alreadySigned=" & skippedSigned.ToString() & ")."
-        )
-        Throw New System.Exception(
-            "No unsigned ProvidersServices cards to accept. " &
-            "CardsFound=" & serviceCount.ToString() &
-            " AlreadySigned=" & skippedSigned.ToString()
-        )
-    End If
-
-    Console.WriteLine(
-        "Cards prepared | accepted=" & acceptedCount.ToString() &
-        " | skippedAlreadySigned=" & skippedSigned.ToString() &
-        " | servicesSynced=" & servicesSynced.ToString() &
-        " | Issaveclose=true | hasSignerSid=" &
-        (Not String.IsNullOrWhiteSpace(currentUserSid)).ToString()
-    )
-
-    If String.IsNullOrWhiteSpace(pocId) Then
-        Throw New System.Exception(
-            "Plan of Care Id missing after GET — cannot POST Save & Close."
-        )
-    End If
 
     Dim postUrl As String =
         "https://webapps.illinois.gov/AGE/AgingCares.CaseManagement/CMIS/CMIS/EditProviderPlanOfCare/" &
-        pocId
+        If(String.IsNullOrWhiteSpace(pocId), fields("Id"), pocId)
 
     Dim postBody As String = BuildFormBody(fields)
 
     Console.WriteLine(
-        "POST Save & Close | fieldCount=" & fields.Count.ToString() &
-        " | bodyChars=" & postBody.Length.ToString()
+        "POST EditProviderPlanOfCare/" & pocId &
+        " | Fields=" & fields.Count.ToString() &
+        " | BodyChars=" & postBody.Length.ToString()
     )
 
     Dim postResult =
@@ -645,11 +532,7 @@ Try
        statusCode <= 399 AndAlso
        Not String.IsNullOrWhiteSpace(location) Then
 
-        Dim toIndex As Boolean =
-            location.IndexOf("ProvidersIndex", StringComparison.OrdinalIgnoreCase) >= 0
-        Console.WriteLine(
-            "Following redirect | toProvidersIndex=" & toIndex.ToString()
-        )
+        Console.WriteLine("FOLLOW REDIRECT " & location)
         Dim follow =
             SendRequest("GET", location, Nothing, postUrl)
 
@@ -662,7 +545,7 @@ Try
        finalUrl.IndexOf("ProvidersIndex", StringComparison.OrdinalIgnoreCase) >= 0 Then
 
         success = True
-        Console.WriteLine("=== EditProviderPlanOfCare completed successfully ===")
+        Console.WriteLine("AgingCares EditProviderPlanOfCare completed successfully.")
 
     ElseIf statusCode >= 300 AndAlso
            statusCode <= 399 AndAlso
@@ -671,7 +554,7 @@ Try
 
         success = True
         finalUrl = location
-        Console.WriteLine("=== EditProviderPlanOfCare completed (302 ProvidersIndex) ===")
+        Console.WriteLine("AgingCares EditProviderPlanOfCare completed (redirect to ProvidersIndex).")
 
     Else
         ' Validation error page often returns 200 on same Edit URL
@@ -679,30 +562,28 @@ Try
             responseHtml.IndexOf("field-validation-error", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
             responseHtml.IndexOf("validation-summary-errors", StringComparison.OrdinalIgnoreCase) >= 0
 
-        Console.WriteLine(
-            "FAIL: save did not land on ProvidersIndex | HTTP=" & statusCode.ToString() &
-            " | validationHints=" & hasValidation.ToString() &
-            " | serviceCards=" & serviceCount.ToString()
-        )
-
         Throw New System.Exception(
             "Save did not land on ProvidersIndex. HTTP " & statusCode.ToString() &
+            " FinalUrl=" & finalUrl &
             " ValidationHints=" & hasValidation.ToString() &
             " ServiceCards=" & serviceCount.ToString()
         )
     End If
-End If
+
+    If Not success Then
+        Throw New System.Exception(
+            "EditProviderPlanOfCare did not complete successfully."
+        )
+    End If
+
+    cookies = cookieJar
 
 Catch ex As Exception
 
     success = False
     errorMessage = ex.ToString()
-    Console.WriteLine("=== EditProviderPlanOfCare FAILED ===")
-    Console.WriteLine(
-        "At failure: HTTP=" & statusCode.ToString() &
-        " | htmlChars=" & responseHtml.Length.ToString() &
-        " | serviceCards=" & serviceCount.ToString()
-    )
+    Console.WriteLine("AgingCares EditProviderPlanOfCare failed.")
     Console.WriteLine(errorMessage)
+    Throw
 
 End Try

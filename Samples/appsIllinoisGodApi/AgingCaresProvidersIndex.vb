@@ -1,8 +1,8 @@
 ' Gets the AgingCares ProvidersIndex page using the shared CookieContainer session
-' and builds dtPendingProviders with each pending provider row (name, DOB, type,
-' referred, county, RowId, PlanOfCareId, AssessmentId, ProviderNo, AddUrl, PocUrl,
-' AllLinks). On failure, errorMessage is set; cookies and dtPendingProviders are
-' Invoke Code arguments.
+' and builds dtPendingProviders from #POCTable (12 columns + derived IDs).
+' Columns: PocUrl, Name, DOB, Type, Referred, County, ZipCode, Status,
+' CCU, Provider, Contract, ECCPISId, PlanOfCareId, AssessmentId.
+' Invoke: cookies (In/Out), dtPendingProviders (Out), errorMessage (Out).
 
 Dim responseHtml As String = ""
 Dim statusCode As Integer = 0
@@ -12,18 +12,20 @@ Try
     errorMessage = ""
 
     dtPendingProviders = New System.Data.DataTable()
+    dtPendingProviders.Columns.Add("PocUrl", GetType(String))
     dtPendingProviders.Columns.Add("Name", GetType(String))
     dtPendingProviders.Columns.Add("DOB", GetType(String))
     dtPendingProviders.Columns.Add("Type", GetType(String))
     dtPendingProviders.Columns.Add("Referred", GetType(String))
     dtPendingProviders.Columns.Add("County", GetType(String))
-    dtPendingProviders.Columns.Add("RowId", GetType(String))
+    dtPendingProviders.Columns.Add("ZipCode", GetType(String))
+    dtPendingProviders.Columns.Add("Status", GetType(String))
+    dtPendingProviders.Columns.Add("CCU", GetType(String))
+    dtPendingProviders.Columns.Add("Provider", GetType(String))
+    dtPendingProviders.Columns.Add("Contract", GetType(String))
+    dtPendingProviders.Columns.Add("ECCPISId", GetType(String))
     dtPendingProviders.Columns.Add("PlanOfCareId", GetType(String))
     dtPendingProviders.Columns.Add("AssessmentId", GetType(String))
-    dtPendingProviders.Columns.Add("ProviderNo", GetType(String))
-    dtPendingProviders.Columns.Add("AddUrl", GetType(String))
-    dtPendingProviders.Columns.Add("PocUrl", GetType(String))
-    dtPendingProviders.Columns.Add("AllLinks", GetType(String))
 
     If cookies Is Nothing Then
         Console.WriteLine("ABORT: cookies CookieContainer is Nothing — run AgingCaresLogin first.")
@@ -282,7 +284,7 @@ Try
                 System.Text.RegularExpressions.RegexOptions.Singleline
             )
 
-        If cellMatches.Count < 6 Then
+        If cellMatches.Count < 12 Then
             skippedShort += 1
             Continue For
         End If
@@ -293,17 +295,19 @@ Try
         Dim typ As String = StripTags(cellMatches(3).Groups(1).Value)
         Dim referred As String = StripTags(cellMatches(4).Groups(1).Value)
         Dim county As String = StripTags(cellMatches(5).Groups(1).Value)
+        Dim zipCode As String = StripTags(cellMatches(6).Groups(1).Value)
+        Dim statusVal As String = StripTags(cellMatches(7).Groups(1).Value)
+        Dim ccu As String = StripTags(cellMatches(8).Groups(1).Value)
+        Dim providerName As String = StripTags(cellMatches(9).Groups(1).Value)
+        Dim contractNo As String = StripTags(cellMatches(10).Groups(1).Value)
+        Dim eccpisId As String = StripTags(cellMatches(11).Groups(1).Value)
 
         If String.IsNullOrWhiteSpace(name) Then
             skippedNoName += 1
             Continue For
         End If
 
-        ' --- All hrefs in Actions column (green + and POC >) ---
-        Dim linkList As New System.Collections.Generic.List(Of String)()
-        Dim addUrl As String = ""
-        Dim pocUrl As String = ""
-
+        Dim actionsUrl As String = ""
         Dim hrefMatches As System.Text.RegularExpressions.MatchCollection =
             System.Text.RegularExpressions.Regex.Matches(
                 actionsHtml,
@@ -316,142 +320,72 @@ Try
             If String.IsNullOrWhiteSpace(abs) Then
                 Continue For
             End If
-            If Not linkList.Contains(abs) Then
-                linkList.Add(abs)
-            End If
-
-            Dim lower As String = abs.ToLowerInvariant()
-            Dim labelHint As String = StripTags(actionsHtml)
-
-            ' POC button / plan-of-care style links
-            If lower.IndexOf("poc", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
-               lower.IndexOf("planofcare", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
-               lower.IndexOf("/cmis/", StringComparison.OrdinalIgnoreCase) >= 0 Then
-                If String.IsNullOrWhiteSpace(pocUrl) OrElse
-                   lower.IndexOf("poc", StringComparison.OrdinalIgnoreCase) >= 0 Then
-                    pocUrl = abs
-                End If
-            End If
-
-            ' Green + / add / claim style links (first non-POC often)
-            If String.IsNullOrWhiteSpace(addUrl) AndAlso
-               (lower.IndexOf("add", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
-                lower.IndexOf("claim", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
-                lower.IndexOf("create", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
-                lower.IndexOf("plus", StringComparison.OrdinalIgnoreCase) >= 0) Then
-                addUrl = abs
+            If abs.IndexOf(
+                "EditProviderPlanOfCare",
+                StringComparison.OrdinalIgnoreCase) >= 0 Then
+                actionsUrl = abs
+                Exit For
             End If
         Next
 
-        ' If we still don't have add/poc split, use order: first link = +, second = POC
-        If linkList.Count >= 1 AndAlso String.IsNullOrWhiteSpace(addUrl) Then
-            addUrl = linkList(0)
-        End If
-        If linkList.Count >= 2 Then
-            If String.IsNullOrWhiteSpace(pocUrl) Then
-                pocUrl = linkList(1)
-            End If
-            ' Prefer last link containing POC text path if present
-            For Each u As String In linkList
-                If u.IndexOf("POC", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
-                   u.IndexOf("PoC", StringComparison.OrdinalIgnoreCase) >= 0 Then
-                    pocUrl = u
-                End If
-            Next
-        ElseIf linkList.Count = 1 AndAlso String.IsNullOrWhiteSpace(pocUrl) Then
-            pocUrl = linkList(0)
+        If String.IsNullOrWhiteSpace(actionsUrl) AndAlso hrefMatches.Count > 0 Then
+            actionsUrl = ToAbsoluteUrl(hrefMatches(0).Groups(1).Value)
         End If
 
-        ' --- IDs from Claim(ProviderNo, AssessmentId, Id) onclick ---
-        Dim providerNo As String = ""
+        Dim planOfCareId As String = ""
         Dim assessmentId As String = ""
-        Dim rowId As String = ""
 
-        Dim claimMatch As System.Text.RegularExpressions.Match =
-            System.Text.RegularExpressions.Regex.Match(
-                actionsHtml & " " & rowHtml,
-                "Claim\s*\(\s*['""]?([^,'""\)]+)['""]?\s*,\s*['""]?([^,'""\)]+)['""]?\s*,\s*['""]?([^,'""\)]+)['""]?\s*\)",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase
-            )
-
-        If claimMatch.Success Then
-            providerNo = claimMatch.Groups(1).Value.Trim()
-            assessmentId = claimMatch.Groups(2).Value.Trim()
-            rowId = claimMatch.Groups(3).Value.Trim()
-        End If
-
-        ' data-* attributes on the row / buttons
-        If String.IsNullOrWhiteSpace(rowId) Then
-            Dim dataId As System.Text.RegularExpressions.Match =
+        If Not String.IsNullOrWhiteSpace(actionsUrl) Then
+            Dim pocIdMatch As System.Text.RegularExpressions.Match =
                 System.Text.RegularExpressions.Regex.Match(
-                    actionsHtml & rowHtml,
-                    "data-(?:id|rowid|assessmentid)\s*=\s*[""']([^""']+)[""']",
+                    actionsUrl,
+                    "EditProviderPlanOfCare/(\d+)",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase
                 )
-            If dataId.Success Then
-                rowId = dataId.Groups(1).Value.Trim()
+            If pocIdMatch.Success Then
+                planOfCareId = pocIdMatch.Groups(1).Value.Trim()
+            End If
+            assessmentId = GetQueryParam(actionsUrl, "AssessmentId")
+            If String.IsNullOrWhiteSpace(assessmentId) Then
+                assessmentId = GetQueryParam(actionsUrl, "assessmentId")
             End If
         End If
 
-        ' Query-string ids from any action link
-        Dim idSourceUrls As New System.Collections.Generic.List(Of String)(linkList)
-        idSourceUrls.Add(pocUrl)
-        idSourceUrls.Add(addUrl)
-
-        For Each u As String In idSourceUrls
-            If String.IsNullOrWhiteSpace(u) Then
-                Continue For
+        If String.IsNullOrWhiteSpace(assessmentId) Then
+            Dim claimMatch As System.Text.RegularExpressions.Match =
+                System.Text.RegularExpressions.Regex.Match(
+                    actionsHtml & " " & rowHtml,
+                    "Claim\s*\(\s*['""]?([^,'""\)]+)['""]?\s*,\s*['""]?([^,'""\)]+)['""]?\s*,\s*['""]?([^,'""\)]+)['""]?\s*\)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                )
+            If claimMatch.Success Then
+                assessmentId = claimMatch.Groups(2).Value.Trim()
             End If
-            If String.IsNullOrWhiteSpace(rowId) Then
-                rowId = GetQueryParam(u, "id")
-                If String.IsNullOrWhiteSpace(rowId) Then
-                    rowId = GetQueryParam(u, "Id")
-                End If
-                If String.IsNullOrWhiteSpace(rowId) Then
-                    rowId = GetQueryParam(u, "rowId")
-                End If
-            End If
-            If String.IsNullOrWhiteSpace(assessmentId) Then
-                assessmentId = GetQueryParam(u, "AssessmentId")
-                If String.IsNullOrWhiteSpace(assessmentId) Then
-                    assessmentId = GetQueryParam(u, "assessmentId")
-                End If
-            End If
-            If String.IsNullOrWhiteSpace(providerNo) Then
-                providerNo = GetQueryParam(u, "ProviderNo")
-                If String.IsNullOrWhiteSpace(providerNo) Then
-                    providerNo = GetQueryParam(u, "ProvNo")
-                End If
-            End If
-        Next
-
-        ' Plan of Care id from EditProviderPlanOfCare/{id} path (fallback: RowId)
-        Dim planOfCareId As String = ""
-        Dim pocIdMatch As System.Text.RegularExpressions.Match =
-            System.Text.RegularExpressions.Regex.Match(
-                If(pocUrl, "") & " " & String.Join(" ", linkList),
-                "EditProviderPlanOfCare/(\d+)",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase
-            )
-        If pocIdMatch.Success Then
-            planOfCareId = pocIdMatch.Groups(1).Value.Trim()
-        ElseIf Not String.IsNullOrWhiteSpace(rowId) Then
-            planOfCareId = rowId
         End If
 
         dtPendingProviders.Rows.Add(
+            actionsUrl,
             name,
             dob,
             typ,
             referred,
             county,
-            rowId,
+            zipCode,
+            statusVal,
+            ccu,
+            providerName,
+            contractNo,
+            eccpisId,
             planOfCareId,
-            assessmentId,
-            providerNo,
-            addUrl,
-            pocUrl,
-            String.Join(" | ", linkList)
+            assessmentId
+        )
+
+        Console.WriteLine(
+            "Row | " & name &
+            " | Zip=" & zipCode &
+            " | ECCPIS=" & eccpisId &
+            " | POC=" & planOfCareId &
+            " | Assessment=" & assessmentId
         )
 
         If String.IsNullOrWhiteSpace(planOfCareId) OrElse
@@ -468,7 +402,7 @@ Try
     Console.WriteLine(
         "Skipped: header=" & skippedHeader.ToString() &
         " | shortRow=" & skippedShort.ToString() &
-        " | emptyName=" & skippedNoName.ToString()
+        " (expected 12 td cells) | emptyName=" & skippedNoName.ToString()
     )
     If missingIds > 0 Then
         Console.WriteLine(

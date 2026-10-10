@@ -2,16 +2,10 @@
 ' ILLINOIS AGINGCARES LOGIN (ADFS / SP2 / WS-Fed)
 ' UiPath Invoke Code - VB.NET
 '
-' IN:
-'   appUsername   As String
-'   appPassword   As System.Security.SecureString
-'
-' IN/OUT:
-'   cookies       As System.Net.CookieContainer
-'
-' OUT:
-'   sessionData   As Dictionary(Of String, Object)   ' extras only
-'   errorMessage  As String
+' IN:  appUsername, appPassword (String)
+' IN/OUT: cookies, errorMessage
+' OUT: sessionData (Dictionary — Trace, FinalUrl, PendingRedirect, etc.)
+' Do not add other Invoke Code arguments; extras live in sessionData or locals.
 '
 ' Capture chain (BobScout):
 '   1) POST UserName/Password on fspartner.illinois.gov  -> MSISAuth
@@ -29,12 +23,48 @@
 ' - SPAuth alone is never success; require AgingCares HTTP 200.
 ' - Strip :443 from URLs for CookieContainer.
 ' ============================================================
+' Locals used in Catch — UiPath Invoke Code does not see Try-scoped Dim in Catch.
 
 Dim cookieJar As System.Net.CookieContainer = Nothing
 Dim appPasswordPlain As String = Nothing
+Dim appUser As String = ""
+Dim loginTrace As New System.Collections.Generic.List(Of String)()
+Dim currentUrl As String = ""
+Dim currentStatus As Integer = 0
+Dim currentLocation As String = ""
+Dim tokenPosts As Integer = 0
+Dim loginPosted As Boolean = False
+Dim partnerJumpDone As Boolean = False
+
+Dim CookieNamesFromJar As Func(Of System.Net.CookieContainer, String) =
+    Function(jar As System.Net.CookieContainer) As String
+        Dim names As New System.Collections.Generic.List(Of String)()
+        If jar Is Nothing Then Return ""
+        For Each cookieUri As String In New String() {
+            "https://webapps.illinois.gov/",
+            "https://webapps.illinois.gov/CMS/SP2/",
+            "https://webapps.illinois.gov/AGE/AgingCares.CaseManagement/",
+            "https://fspartner.illinois.gov/",
+            "https://fsresource.illinois.gov/"
+        }
+            Try
+                For Each c As System.Net.Cookie In jar.GetCookies(New System.Uri(cookieUri))
+                    If Not names.Contains(c.Name) Then
+                        names.Add(c.Name)
+                    End If
+                Next
+            Catch
+            End Try
+        Next
+        Return String.Join(",", names)
+    End Function
 
 Try
     errorMessage = ""
+    loginTrace.Clear()
+
+    appPasswordPlain = If(appPassword, "").Trim()
+    appUser = If(appUsername, "").Trim()
 
     sessionData = New System.Collections.Generic.Dictionary(Of String, Object)(
         StringComparer.OrdinalIgnoreCase
@@ -45,6 +75,7 @@ Try
     sessionData("Trace") = ""
     sessionData("StatusCode") = 0
     sessionData("CookieNames") = ""
+    sessionData("PendingRedirect") = ""
     sessionData("baseUrl") = "https://webapps.illinois.gov"
 
     If cookies Is Nothing Then
@@ -52,6 +83,26 @@ Try
     End If
 
     cookieJar = cookies
+
+    If String.IsNullOrWhiteSpace(appUser) Then
+        Throw New System.Exception("appUsername is required.")
+    End If
+
+    If String.IsNullOrWhiteSpace(appPasswordPlain) Then
+        Throw New System.Exception("appPassword is required.")
+    End If
+
+    Dim CollectCookieNames As Func(Of String) =
+        Function() As String
+            Return CookieNamesFromJar(cookieJar)
+        End Function
+
+    Dim LogCookies As Action(Of String) =
+        Sub(label As String)
+            Dim snap As String = CollectCookieNames()
+            loginTrace.Add("COOKIES | " & label & " | " & snap)
+            Console.WriteLine("COOKIES | " & label & " | " & snap)
+        End Sub
 
     Dim startUrl As String =
         "https://webapps.illinois.gov/AGE/AgingCares.CaseManagement/CMIS/CMIS/ProvidersIndex"
@@ -71,8 +122,6 @@ Try
     Dim partnerAdfsHost As String =
         "fspartner.illinois.gov"
 
-    Dim trace As New System.Collections.Generic.List(Of String)()
-
     Console.WriteLine("Starting marked action: AgingCares Login")
 
     ' Prefer TLS 1.2 only — offering TLS 1.0/1.1 can make some hosts RST the socket.
@@ -90,10 +139,6 @@ Try
     System.Net.ServicePointManager.Expect100Continue = False
     System.Net.ServicePointManager.DefaultConnectionLimit = 20
     System.Net.ServicePointManager.CheckCertificateRevocationList = False
-
-    appPasswordPlain =
-        New System.Net.NetworkCredential("", appPassword).Password
-
 
     Dim NormalizeUrl As Func(Of String, String) =
         Function(url As String) As String
@@ -946,6 +991,8 @@ Try
                         End Using
                     End If
 
+                    Console.WriteLine(">>> " & method & " " & url)
+
                     Dim resp As System.Net.HttpWebResponse = Nothing
 
                     Try
@@ -996,7 +1043,7 @@ Try
                             method & " " & url & " -> HTTP " & status.ToString()
                         )
 
-                        trace.Add(
+                        loginTrace.Add(
                             method & " | " & url &
                             " | Status=" & status.ToString() &
                             If(
@@ -1029,7 +1076,7 @@ Try
                             attempt.ToString() &
                             " — retrying " & method & " " & url
                         )
-                        trace.Add(
+                        loginTrace.Add(
                             "RETRY | attempt=" & attempt.ToString() &
                             " | " & method & " | " & url &
                             " | " & ex.Message
@@ -1052,20 +1099,67 @@ Try
         End Function
 
 
+    Dim FollowRedirectGet As Func(Of String, String, System.Tuple(Of String, String, Integer, String)) =
+        Function(redirectUrl As String, referer As String)
+            redirectUrl = NormalizeUrl(redirectUrl)
+            Dim isWebApps As Boolean =
+                redirectUrl.IndexOf("webapps.illinois.gov", StringComparison.OrdinalIgnoreCase) >= 0
+            Dim attempts As Integer = If(isWebApps, 4, 1)
+            Dim lastEx As System.Exception = Nothing
+
+            For attempt As Integer = 1 To attempts
+                If attempt > 1 Then
+                    Console.WriteLine(
+                        "Redirect GET retry " & attempt.ToString() &
+                        " | " & redirectUrl
+                    )
+                    loginTrace.Add(
+                        "REDIRECT RETRY | attempt=" & attempt.ToString() &
+                        " | " & redirectUrl
+                    )
+                    System.Threading.Thread.Sleep(800 * attempt)
+                End If
+
+                If isWebApps AndAlso attempt = 1 Then
+                    LogCookies("before webapps redirect GET")
+                End If
+
+                Try
+                    Return SendRequest("GET", redirectUrl, Nothing, referer)
+                Catch ex As System.Exception
+                    lastEx = ex
+                    Dim retryable As Boolean =
+                        IsTransientNetworkError(ex) OrElse
+                        TypeOf ex Is System.Net.WebException
+                    If Not retryable OrElse attempt >= attempts Then
+                        Throw
+                    End If
+                End Try
+            Next
+
+            If lastEx IsNot Nothing Then
+                Throw lastEx
+            End If
+
+            Throw New System.Exception("FollowRedirectGet failed: " & redirectUrl)
+        End Function
+
+
     Dim current =
         SendRequest("GET", startUrl, Nothing, "")
 
     Dim currentHtml As String = ""
-    Dim currentUrl As String = ""
-    Dim currentStatus As Integer = 0
-    Dim currentLocation As String = ""
     Dim loggedIn As Boolean = False
-    Dim loginPosted As Boolean = False
     Dim realmPosted As Boolean = False
-    Dim partnerJumpDone As Boolean = False
     Dim partnerDirectDone As Boolean = False
-    Dim tokenPosts As Integer = 0
     Dim sp2SettleTries As Integer = 0
+
+    currentUrl = ""
+    currentStatus = 0
+    currentLocation = ""
+    loginPosted = False
+    partnerJumpDone = False
+    tokenPosts = 0
 
 
     For stepNumber As Integer = 1 To 60
@@ -1086,9 +1180,41 @@ Try
             If String.IsNullOrWhiteSpace(stillTokenForm) Then
                 loggedIn = True
                 Console.WriteLine("AgingCares application reached.")
-                trace.Add("SUCCESS | Protected application reached | " & currentUrl)
+                loginTrace.Add("SUCCESS | Protected application reached | " & currentUrl)
                 Exit For
             End If
+        End If
+
+
+        ' --------------------------------------------------------
+        ' WS-Fed token auto-post — before redirect follow (302 can include wresult body)
+        ' --------------------------------------------------------
+        Dim wsFed = TryGetWsFedFields(currentHtml, currentUrl)
+
+        If wsFed.Item1 IsNot Nothing AndAlso
+           Not String.IsNullOrWhiteSpace(wsFed.Item2) Then
+
+            Dim tokenFields = wsFed.Item1
+            Dim tokenAction As String = wsFed.Item2
+
+            tokenPosts += 1
+            Console.WriteLine(
+                "POST WS-Fed token handoff #" & tokenPosts.ToString() &
+                " -> " & tokenAction
+            )
+            loginTrace.Add(
+                "TOKEN HANDOFF #" & tokenPosts.ToString() &
+                " | POST " & tokenAction &
+                " | from=" & currentUrl &
+                " | wresultChars=" & tokenFields("wresult").Length.ToString()
+            )
+
+            Dim previousUrl As String = currentUrl
+            current = SendRequest("POST", tokenAction, tokenFields, previousUrl)
+            If tokenPosts >= 2 Then
+                LogCookies("after token handoff #" & tokenPosts.ToString())
+            End If
+            Continue For
         End If
 
 
@@ -1100,13 +1226,16 @@ Try
            Not String.IsNullOrWhiteSpace(currentLocation) Then
 
             If IsFederationIdentifier(currentLocation) Then
-                trace.Add("SKIP REDIRECT | federation id | " & currentLocation)
+                loginTrace.Add("SKIP REDIRECT | federation id | " & currentLocation)
             Else
-                Console.WriteLine("FOLLOW REDIRECT")
-                trace.Add("FOLLOW REDIRECT | " & currentLocation)
+                Console.WriteLine("FOLLOW REDIRECT -> GET " & currentLocation)
+                loginTrace.Add("FOLLOW REDIRECT | " & currentLocation)
 
                 Dim previousUrl As String = currentUrl
-                current = SendRequest("GET", currentLocation, Nothing, previousUrl)
+                current = FollowRedirectGet(currentLocation, previousUrl)
+                If currentLocation.IndexOf("webapps.illinois.gov", StringComparison.OrdinalIgnoreCase) >= 0 Then
+                    LogCookies("after webapps redirect GET")
+                End If
                 Continue For
             End If
         End If
@@ -1147,12 +1276,12 @@ Try
                 )
 
             ' Capture uses DOMAIN\user exactly — do not rewrite for password POST.
-            loginFields("UserName") = appUsername
+            loginFields("UserName") = appUser
             loginFields("Password") = appPasswordPlain
             loginFields("AuthMethod") = "FormsAuthentication"
 
             Console.WriteLine("POST ADFS login form")
-            trace.Add("LOGIN FORM | POST " & loginAction)
+            loginTrace.Add("LOGIN FORM | POST " & loginAction)
 
             Dim previousUrl As String = currentUrl
             current = SendRequest("POST", loginAction, loginFields, previousUrl)
@@ -1172,13 +1301,13 @@ Try
             Dim realmFields = ExtractInputs(realmForm)
             Dim realmAction As String = GetFormAction(realmForm, currentUrl)
 
-            realmFields("Email") = ToRealmEmail(appUsername)
+            realmFields("Email") = ToRealmEmail(appUser)
             realmFields("HomeRealmByEmail") = "true"
 
             Console.WriteLine("POST home-realm form")
-            trace.Add(
+            loginTrace.Add(
                 "HOME REALM | POST " & realmAction &
-                " | Email=" & ToRealmEmail(appUsername)
+                " | Email=" & ToRealmEmail(appUser)
             )
 
             Dim previousUrl As String = currentUrl
@@ -1189,49 +1318,24 @@ Try
 
 
         ' --------------------------------------------------------
-        ' WS-Fed token auto-post (fspartner -> fsresource -> SP2 -> AgingCares)
-        ' Capture needs ~3 token posts; do not stop after the first.
-        ' --------------------------------------------------------
-        Dim wsFed = TryGetWsFedFields(currentHtml, currentUrl)
-
-        If wsFed.Item1 IsNot Nothing AndAlso
-           Not String.IsNullOrWhiteSpace(wsFed.Item2) Then
-
-            Dim tokenFields = wsFed.Item1
-            Dim tokenAction As String = wsFed.Item2
-
-            tokenPosts += 1
-            Console.WriteLine(
-                "POST WS-Fed token handoff #" & tokenPosts.ToString() &
-                " -> " & tokenAction
-            )
-            trace.Add(
-                "TOKEN HANDOFF #" & tokenPosts.ToString() &
-                " | POST " & tokenAction &
-                " | from=" & currentUrl &
-                " | wresultChars=" & tokenFields("wresult").Length.ToString()
-            )
-
-            Dim previousUrl As String = currentUrl
-            current = SendRequest("POST", tokenAction, tokenFields, previousUrl)
-            Continue For
-        End If
-
-
-        ' --------------------------------------------------------
         ' SP2 → AgingCares handoff page often needs several GETs
         ' before the token form appears (see capture req 6-8).
+        ' wtrealm=AgingCares is usually in query string, not path.
         ' --------------------------------------------------------
         If currentStatus = 200 AndAlso
            currentUrl.IndexOf("/CMS/SP2/", StringComparison.OrdinalIgnoreCase) >= 0 AndAlso
-           currentUrl.IndexOf("AgingCares", StringComparison.OrdinalIgnoreCase) >= 0 AndAlso
-           sp2SettleTries < 5 Then
+           tokenPosts >= 2 AndAlso
+           Not loggedIn AndAlso
+           sp2SettleTries < 5 AndAlso
+           (currentUrl.IndexOf("wa=", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
+            currentUrl.IndexOf("AgingCares", StringComparison.OrdinalIgnoreCase) >= 0 OrElse
+            currentHtml.IndexOf("wresult", StringComparison.OrdinalIgnoreCase) < 0) Then
 
             sp2SettleTries += 1
             Console.WriteLine(
                 "SP2 settle re-GET #" & sp2SettleTries.ToString()
             )
-            trace.Add("SP2 SETTLE | GET " & currentUrl & " | try=" & sp2SettleTries.ToString())
+            loginTrace.Add("SP2 SETTLE | GET " & currentUrl & " | try=" & sp2SettleTries.ToString())
 
             System.Threading.Thread.Sleep(300)
 
@@ -1251,7 +1355,7 @@ Try
            Not jsRedirect.Equals(currentUrl, StringComparison.OrdinalIgnoreCase) Then
 
             Console.WriteLine("FOLLOW HTML REDIRECT")
-            trace.Add("HTML REDIRECT | GET " & jsRedirect)
+            loginTrace.Add("HTML REDIRECT | GET " & jsRedirect)
 
             Dim previousUrl As String = currentUrl
             current = SendRequest("GET", jsRedirect, Nothing, previousUrl)
@@ -1269,7 +1373,7 @@ Try
            Not partnerLink.Equals(currentUrl, StringComparison.OrdinalIgnoreCase) Then
 
             Console.WriteLine("FOLLOW PARTNER IDP LINK")
-            trace.Add("PARTNER LINK | GET " & partnerLink)
+            loginTrace.Add("PARTNER LINK | GET " & partnerLink)
 
             Dim previousUrl As String = currentUrl
             current = SendRequest("GET", partnerLink, Nothing, previousUrl)
@@ -1293,7 +1397,7 @@ Try
             Dim whrUrl As String = BuildWhrSelectUrl(currentUrl)
 
             Console.WriteLine("SELECT PARTNER VIA whr")
-            trace.Add("WHR SELECT | GET " & whrUrl)
+            loginTrace.Add("WHR SELECT | GET " & whrUrl)
 
             Try
                 current = SendRequest("GET", whrUrl, Nothing, previousUrl)
@@ -1304,7 +1408,7 @@ Try
 
                 Dim partnerUrl As String = BuildPartnerLoginUrl(currentUrl)
                 Console.WriteLine("WHR failed; fallback direct fspartner")
-                trace.Add(
+                loginTrace.Add(
                     "PARTNER JUMP FALLBACK | GET " & partnerUrl &
                     " | after=" & whrEx.Message
                 )
@@ -1327,7 +1431,7 @@ Try
             partnerDirectDone = True
             Dim partnerUrl As String = BuildPartnerLoginUrl(currentUrl)
             Console.WriteLine("DIRECT FSPARTNER LOGIN URL")
-            trace.Add("PARTNER DIRECT | GET " & partnerUrl)
+            loginTrace.Add("PARTNER DIRECT | GET " & partnerUrl)
 
             Dim previousUrl As String = currentUrl
             current = SendRequest("GET", partnerUrl, Nothing, previousUrl)
@@ -1340,7 +1444,7 @@ Try
         Dim hasWresultText As Boolean =
             currentHtml.IndexOf("wresult", StringComparison.OrdinalIgnoreCase) >= 0
 
-        trace.Add(
+        loginTrace.Add(
             "STOP | No recognised auth action | Url=" & currentUrl &
             " | Fields=" & stuckFields &
             " | HtmlHasWresultText=" & hasWresultText.ToString() &
@@ -1365,7 +1469,7 @@ Try
            Not String.IsNullOrWhiteSpace(pending.Item2) Then
 
             Console.WriteLine("FINAL | posting pending WS-Fed form first")
-            trace.Add("FINAL PENDING TOKEN | POST " & pending.Item2)
+            loginTrace.Add("FINAL PENDING TOKEN | POST " & pending.Item2)
 
             Dim pendingPosted =
                 SendRequest("POST", pending.Item2, pending.Item1, currentUrl)
@@ -1389,7 +1493,7 @@ Try
     If Not loggedIn Then
 
         Console.WriteLine("FINAL TEST | GET protected URL and follow redirects")
-        trace.Add("FINAL TEST | GET protected URL")
+        loginTrace.Add("FINAL TEST | GET protected URL")
 
         Dim verifyUrl As String = startUrl
         Dim previousUrl As String = currentUrl
@@ -1421,7 +1525,7 @@ Try
                             "/AGE/AgingCares.CaseManagement/CMIS/CMIS/ProvidersIndex"
                         )
                     )
-                trace.Add("FINAL TEST | SP2 handoff first | " & verifyUrl)
+                loginTrace.Add("FINAL TEST | SP2 handoff first | " & verifyUrl)
             End If
         Catch
         End Try
@@ -1539,7 +1643,7 @@ Try
                             NormalizeUrl(currentUrl)
                         )
 
-                    loginFields("UserName") = appUsername
+                    loginFields("UserName") = appUser
                     loginFields("Password") = appPasswordPlain
                     loginFields("AuthMethod") = "FormsAuthentication"
 
@@ -1577,35 +1681,24 @@ Try
 
         If loggedIn Then
             Console.WriteLine("AgingCares application reached after final verification.")
-            trace.Add("SUCCESS | Final verification reached app | " & currentUrl)
+            loginTrace.Add("SUCCESS | Final verification reached app | " & currentUrl)
         End If
 
     End If
 
 
-    Dim cookieNames As New System.Collections.Generic.List(Of String)()
-
-    For Each host In New String() {
-        "https://webapps.illinois.gov/",
-        "https://fspartner.illinois.gov/",
-        "https://fsresource.illinois.gov/"
-    }
-        For Each c As System.Net.Cookie In cookieJar.GetCookies(New System.Uri(host))
-            If Not cookieNames.Contains(c.Name) Then
-                cookieNames.Add(c.Name)
-            End If
-        Next
-    Next
+    Dim cookieNamesCsv As String = CollectCookieNames()
 
 
     sessionData("FinalUrl") = currentUrl
     sessionData("StatusCode") = currentStatus
     sessionData("IsLoggedIn") = loggedIn
-    sessionData("Trace") = String.Join(Environment.NewLine, trace)
-    sessionData("CookieNames") = String.Join(",", cookieNames)
+    sessionData("Trace") = String.Join(Environment.NewLine, loginTrace)
+    sessionData("CookieNames") = cookieNamesCsv
     sessionData("TokenPosts") = tokenPosts
     sessionData("LoginPosted") = loginPosted
     sessionData("PartnerJump") = partnerJumpDone
+    sessionData("PendingRedirect") = If(currentLocation, "")
 
     cookies = cookieJar
 
@@ -1623,7 +1716,7 @@ Try
             ", TokenPosts=" & tokenPosts.ToString() &
             ", PartnerJump=" & partnerJumpDone.ToString() &
             Environment.NewLine &
-            "CookieNames=" & String.Join(",", cookieNames) &
+            "CookieNames=" & cookieNamesCsv &
             Environment.NewLine &
             "Expected token chain: fspartner→fsresource, fsresource→CMS/SP2, SP2→AgingCares." &
             " Check sessionData Trace for TOKEN HANDOFF targets."
@@ -1647,21 +1740,29 @@ Catch ex As Exception
     End If
 
     sessionData("IsLoggedIn") = False
-
-    If Not sessionData.ContainsKey("FinalUrl") Then
-        sessionData("FinalUrl") = ""
-    End If
-
-    If Not sessionData.ContainsKey("Trace") Then
-        sessionData("Trace") = ""
-    End If
+    sessionData("FinalUrl") = If(currentUrl, "")
+    sessionData("StatusCode") = currentStatus
+    sessionData("Trace") = String.Join(Environment.NewLine, loginTrace)
+    sessionData("TokenPosts") = tokenPosts
+    sessionData("LoginPosted") = loginPosted
+    sessionData("PartnerJump") = partnerJumpDone
+    sessionData("PendingRedirect") = If(currentLocation, "")
 
     If cookieJar IsNot Nothing Then
         cookies = cookieJar
     End If
+    sessionData("CookieNames") = CookieNamesFromJar(cookieJar)
 
     errorMessage = ex.ToString()
     Console.WriteLine("AgingCares login failed.")
+    If Not String.IsNullOrWhiteSpace(currentLocation) Then
+        Console.WriteLine("Last redirect Location (may have timed out): " & currentLocation)
+    End If
+    Console.WriteLine(
+        "Failure context | FinalUrl=" & If(currentUrl, "") &
+        " | HTTP=" & currentStatus.ToString() &
+        " | TokenPosts=" & tokenPosts.ToString()
+    )
 
 Finally
 
