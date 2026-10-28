@@ -398,6 +398,9 @@ Try
             f("visits_per_day") = Newtonsoft.Json.Linq.JValue.CreateNull()
             f("visits_per_week") = Newtonsoft.Json.Linq.JValue.CreateNull()
             f("visits_per_month") = Newtonsoft.Json.Linq.JValue.CreateNull()
+            ' Not printed on AgingCares HTML — keep null (no inference).
+            f("days_per_week") = Newtonsoft.Json.Linq.JValue.CreateNull()
+            f("days_per_month") = Newtonsoft.Json.Linq.JValue.CreateNull()
             f("units_per_day") = Newtonsoft.Json.Linq.JValue.CreateNull()
             f("units_per_week") = Newtonsoft.Json.Linq.JValue.CreateNull()
             f("units_per_month") = Newtonsoft.Json.Linq.JValue.CreateNull()
@@ -454,58 +457,14 @@ Try
                         poc, freqPat, System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                 Dim daysWeek As Object = Nothing
                 If fm.Success Then daysWeek = ParseNumber(fm.Groups(1).Value)
-                Dim hoursDayRaw As String = GetInputValue(
-                    poc, "DONScoreView_" & donKey & "HoursPerDay")
-                If String.IsNullOrWhiteSpace(hoursDayRaw) Then
-                    hoursDayRaw = GetInputValue(poc, "DONScoreView_" & donKey & "Hours")
-                End If
-                Dim hoursMonthRaw As String = GetInputValue(
-                    poc, "DONScoreView_" & donKey & "HoursPerMonth")
                 Dim t As New Newtonsoft.Json.Linq.JObject()
                 t("task") = New Newtonsoft.Json.Linq.JValue(taskName)
-                t("hours_per_day") = JNum(ParseNumber(hoursDayRaw))
+                t("minutes_per_week") = JNull()
+                t("hours_per_day") = JNull()
+                t("hours_per_week") = JNull()
                 t("days_per_week") = JNum(daysWeek)
-                t("hours_per_month") = JNum(ParseNumber(hoursMonthRaw))
+                t("hours_per_month") = JNull()
                 arr.Add(t)
-            Next
-            Return arr
-        End Function
-
-    Dim ParseDaysOfWeek As Func(Of String, Newtonsoft.Json.Linq.JArray) =
-        Function(raw As String) As Newtonsoft.Json.Linq.JArray
-            Dim arr As New Newtonsoft.Json.Linq.JArray()
-            If String.IsNullOrWhiteSpace(raw) Then Return arr
-            Dim map As New System.Collections.Generic.Dictionary(
-                Of String, String)(StringComparer.OrdinalIgnoreCase)
-            map("monday") = "MON"
-            map("mon") = "MON"
-            map("tuesday") = "TUE"
-            map("tue") = "TUE"
-            map("wednesday") = "WED"
-            map("wed") = "WED"
-            map("thursday") = "THU"
-            map("thu") = "THU"
-            map("friday") = "FRI"
-            map("fri") = "FRI"
-            map("saturday") = "SAT"
-            map("sat") = "SAT"
-            map("sunday") = "SUN"
-            map("sun") = "SUN"
-            For Each part As String In raw.Split(
-                New Char() {","c, ";"c, "|"c, "/"c, " "c},
-                System.StringSplitOptions.RemoveEmptyEntries)
-                Dim p As String = part.Trim()
-                If map.ContainsKey(p) Then
-                    Dim code As String = map(p)
-                    Dim exists As Boolean = False
-                    For Each tok As Newtonsoft.Json.Linq.JToken In arr
-                        If String.Equals(CStr(tok), code, StringComparison.OrdinalIgnoreCase) Then
-                            exists = True
-                            Exit For
-                        End If
-                    Next
-                    If Not exists Then arr.Add(New Newtonsoft.Json.Linq.JValue(code))
-                End If
             Next
             Return arr
         End Function
@@ -639,10 +598,7 @@ Try
 
     Dim authStatus As String = Nothing
 
-    Dim assessType As String = LineAfterLabel(pocLines, "Assessment Type")
-    If String.IsNullOrWhiteSpace(assessType) Then
-        assessType = LineAfterLabel(pocLines, "Type of Assessment")
-    End If
+    Dim assessType As String = Nothing
 
     Dim assessmentDate As String = ParseCmisHiddenDate(eligDeterm)
 
@@ -650,21 +606,7 @@ Try
 
     Dim authStartDate As String = ParseCmisHiddenDate(eligDeterm)
 
-    Dim authEndDate As String = ParseCmisHiddenDate(
-        GetInputValue(pocHtml, "AuthorizationEndDate"))
-    If authEndDate Is Nothing Then
-        authEndDate = ParseCmisHiddenDate(GetInputValue(pocHtml, "EligibilityEndDate"))
-    End If
-    If authEndDate Is Nothing Then
-        authEndDate = ParseCmisVisibleDate(
-            LineAfterLabel(pocLines, "Authorization End Date"))
-    End If
-    If authEndDate Is Nothing Then
-        authEndDate = ParseCmisVisibleDate(LineAfterLabel(pocLines, "End Date"))
-    End If
-    If authEndDate Is Nothing Then
-        authEndDate = ParseCmisVisibleDate(LineAfterLabel(pocLines, "Valid Through"))
-    End If
+    Dim authEndDate As String = Nothing
 
     ' Address split from AddressLine3 "City, State Zip"
     Dim city As String = Nothing
@@ -729,6 +671,30 @@ Try
     Dim participantPhoneRaw As String = Nothing
     Dim ccuContract As String = Nothing
     Dim hubCcuName As String = Nothing
+    Dim participantFirstName As String = Nothing
+    Dim participantMiddleName As String = Nothing
+    Dim participantLastName As String = Nothing
+
+    If hubHtml IsNot Nothing Then
+        ' eCCPIS: Participant Id | Last Name | First Name | M. I. | ...
+        Dim eccpisName As System.Text.RegularExpressions.Match =
+            System.Text.RegularExpressions.Regex.Match(
+                hubHtml,
+                "eCCPIS Participant Records</caption>\s*<thead>[\s\S]*?<tbody>\s*<tr[^>]*>\s*" &
+                "<td[^>]*>[^<]*</td>\s*" &
+                "<td[^>]*>([^<]*)</td>\s*" &
+                "<td[^>]*>([^<]*)</td>\s*" &
+                "<td[^>]*>([^<]*)</td>",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+        If eccpisName.Success Then
+            participantLastName = HtmlDecode(eccpisName.Groups(1).Value).Trim()
+            participantFirstName = HtmlDecode(eccpisName.Groups(2).Value).Trim()
+            Dim mi As String = HtmlDecode(eccpisName.Groups(3).Value).Trim()
+            If Not String.IsNullOrWhiteSpace(mi) Then participantMiddleName = mi
+            If String.IsNullOrWhiteSpace(participantLastName) Then participantLastName = Nothing
+            If String.IsNullOrWhiteSpace(participantFirstName) Then participantFirstName = Nothing
+        End If
+    End If
 
     If hubLines.Count > 0 Then
         Dim hi As Integer
@@ -740,7 +706,11 @@ Try
                 idoaId = hubLine.Substring(hubLine.IndexOf(":"c) + 1).Trim()
             End If
             If hubLow.StartsWith("rin") AndAlso hubLine.IndexOf(":"c) >= 0 Then
-                rin = hubLine.Substring(hubLine.IndexOf(":"c) + 1).Trim()
+                Dim rinRaw As String =
+                    hubLine.Substring(hubLine.IndexOf(":"c) + 1).Trim()
+                If System.Text.RegularExpressions.Regex.IsMatch(rinRaw, "^\d+$") Then
+                    rin = rinRaw
+                End If
             End If
             If hubLow.StartsWith("ssn:") Then
                 ssnMasked = MaskSsn(hubLine.Substring(hubLine.IndexOf(":"c) + 1).Trim())
@@ -776,26 +746,15 @@ Try
                 End If
             End If
 
+            ' Hub phone line e.g. "(309) 221-7518 - Cell Phone (Personal)"
+            ' Require a real phone at the start — not just any "(...)" (age, CSS, etc.).
             If participantPhoneRaw Is Nothing AndAlso
-               hubLine.StartsWith("("c) AndAlso hubLine.IndexOf(")"c) > 0 Then
+               System.Text.RegularExpressions.Regex.IsMatch(
+                   hubLine,
+                   "^\(\d{3}\)\s*\d{3}-\d{4}") Then
                 participantPhoneRaw = hubLine
             End If
         Next
-
-        If String.IsNullOrWhiteSpace(participantName) Then
-            For i As Integer = 0 To hubLines.Count - 1
-                If hubLines(i).IndexOf("Navigation", StringComparison.OrdinalIgnoreCase) >= 0 AndAlso
-                   i + 1 < hubLines.Count Then
-                    Dim cand As String = hubLines(i + 1)
-                    If System.Text.RegularExpressions.Regex.IsMatch(
-                        cand, "^[A-Za-z][A-Za-z\s'\-\.]+$") AndAlso
-                       cand.IndexOf(":"c) < 0 Then
-                        participantName = cand
-                        Exit For
-                    End If
-                End If
-            Next
-        End If
 
         hubCcuName = LineAfterLabel(hubLines, "Care Coordinator Unit Name")
         ccuContract = LineAfterLabel(hubLines, "CCU Contract Number")
@@ -824,9 +783,6 @@ Try
         End If
         If dob Is Nothing Then
             dob = ParseCmisHiddenDate(GetInputValue(supHtml, "DOB"))
-        End If
-        If String.IsNullOrWhiteSpace(participantName) Then
-            participantName = GetInputValue(supHtml, "FullName")
         End If
         If String.IsNullOrWhiteSpace(addressFull) Then
             Dim fullAddr As String = GetInputValue(supHtml, "FullAddress")
@@ -913,8 +869,6 @@ Try
         Dim installation As String = GetInputValue(pocHtml, prefix & "Installation")
         Dim monthlyShares As String = GetInputValue(pocHtml, prefix & "MonthlyShares")
         Dim connectionType As String = GetInputValue(pocHtml, prefix & "ConnectionType")
-        Dim daysOfWeekRaw As String = GetInputValue(pocHtml, prefix & "DaysOfWeek")
-        Dim providerLocation As String = GetInputValue(pocHtml, prefix & "ProviderLocation")
         Dim svcStartHidden As String = GetInputValue(pocHtml, prefix & "ServiceStartDate")
         Dim provSig As String = GetInputValue(pocHtml, prefix & "ProviderSignature")
         Dim provSigDate As String = GetInputValue(pocHtml, prefix & "ProviderSignatureDate")
@@ -974,29 +928,8 @@ Try
             freq("connectivity_type") = New Newtonsoft.Json.Linq.JValue(connectionType)
         End If
 
-        Dim dayArr As Newtonsoft.Json.Linq.JArray = ParseDaysOfWeek(daysOfWeekRaw)
-        If dayArr.Count = 0 AndAlso foundType >= 0 Then
-            For li As Integer = foundType To System.Math.Min(foundType + 30, pocLines.Count - 1)
-                If pocLines(li).IndexOf("Day of Week", StringComparison.OrdinalIgnoreCase) >= 0 AndAlso
-                   li + 1 < pocLines.Count Then
-                    dayArr = ParseDaysOfWeek(pocLines(li + 1))
-                    If dayArr.Count > 0 Then Exit For
-                End If
-            Next
-        End If
-        freq("day_of_week") = dayArr
-
         Dim lineNum As Integer = i + 1
 
-        Dim serviceRate As Newtonsoft.Json.Linq.JToken = JNull()
-        Dim rateRaw As String = GetInputValue(pocHtml, prefix & "HourlyRate")
-        If String.IsNullOrWhiteSpace(rateRaw) Then
-            rateRaw = GetInputValue(pocHtml, prefix & "ProviderRate")
-        End If
-        If Not String.IsNullOrWhiteSpace(rateRaw) Then
-            serviceRate = JNum(ParseNumber(rateRaw))
-        End If
-        ' service_rate_label: UNIT_15_MIN | HOUR | WEEK | MONTH — only if printed; else null
         Dim serviceRateLabel As String = Nothing
 
         Dim tasksArr As New Newtonsoft.Json.Linq.JArray()
@@ -1004,20 +937,18 @@ Try
             tasksArr = ExtractDonTasks(pocHtml)
         End If
 
-        Dim svcEndHidden As String = GetInputValue(pocHtml, prefix & "ServiceEndDate")
-
         Dim svcObj As New Newtonsoft.Json.Linq.JObject()
         svcObj("line_number") = New Newtonsoft.Json.Linq.JValue(lineNum)
         svcObj("service_type") = New Newtonsoft.Json.Linq.JValue(svcType)
         svcObj("service_action") = JNull()
-        svcObj("service_rate") = serviceRate
+        svcObj("service_rate") = JNull()
         svcObj("service_rate_label") = JStr(serviceRateLabel)
         svcObj("provider_name") = JStr(providerName)
-        svcObj("provider_location") = JStr(providerLocation)
+        svcObj("provider_location") = JNull()
         svcObj("provider_phones") = ParsePhoneList(providerPhone)
         svcObj("referral_date") = JStr(referralDate)
         svcObj("service_start_date") = JStr(svcStart)
-        svcObj("service_end_date") = JStr(ParseCmisHiddenDate(svcEndHidden))
+        svcObj("service_end_date") = JNull()
         svcObj("frequency") = freq
         svcObj("tasks") = tasksArr
         servicesArr.Add(svcObj)
@@ -1046,8 +977,8 @@ Try
         Throw New System.Exception("No service_authorizations_summary found in Plan of Care HTML.")
     End If
 
-    Dim attending As String = LineAfterLabel(pocLines, "Attending Provider")
-    Dim referring As String = LineAfterLabel(pocLines, "Referring Provider")
+    Dim attending As String = Nothing
+    Dim referring As String = Nothing
 
     ' Authorized representative object
     Dim authRep As Newtonsoft.Json.Linq.JToken = Newtonsoft.Json.Linq.JValue.CreateNull()
@@ -1114,16 +1045,7 @@ Try
         sec3Desc = CStr(dxSorted(3)("DESCRIPTION"))
     End If
 
-    Dim assessmentRecordId As String = GetInputValue(pocHtml, "AssessmentId")
-
-    Dim payorName As String = LineAfterLabel(pocLines, "Payor")
-    If String.IsNullOrWhiteSpace(payorName) Then
-        payorName = GetInputValue(pocHtml, "PayorName")
-    End If
-    Dim payorProgram As String = LineAfterLabel(pocLines, "Program")
-    If String.IsNullOrWhiteSpace(payorProgram) Then
-        payorProgram = GetInputValue(pocHtml, "PayorProgram")
-    End If
+    Dim assessmentRecordId As String = Nothing
 
     ' ---------- assemble root ----------
     Dim root As New Newtonsoft.Json.Linq.JObject()
@@ -1138,8 +1060,8 @@ Try
     extraction("end_date") = JStr(authEndDate)
 
     Dim payorObj As New Newtonsoft.Json.Linq.JObject()
-    payorObj("name") = JStr(payorName)
-    payorObj("program") = JStr(payorProgram)
+    payorObj("name") = New Newtonsoft.Json.Linq.JValue(payor)
+    payorObj("program") = JNull()
     payorObj("payor_id") = JNull()
     extraction("payor") = payorObj
 
@@ -1166,7 +1088,10 @@ Try
     Dim partInfo As New Newtonsoft.Json.Linq.JObject()
     partInfo("participant_id") = JStr(participantId)
     partInfo("participant_idoa_id") = JStr(idoaId)
-    partInfo("participant_name") = JStr(participantName)
+    partInfo("participant_full_name") = JStr(participantName)
+    partInfo("participant_first_name") = JStr(participantFirstName)
+    partInfo("participant_middle_name") = JStr(participantMiddleName)
+    partInfo("participant_last_name") = JStr(participantLastName)
 
     Dim addrObj As New Newtonsoft.Json.Linq.JObject()
     addrObj("full") = JStr(addressFull)
@@ -1208,7 +1133,7 @@ Try
     processing("market") = New Newtonsoft.Json.Linq.JValue(mkt)
     processing("payor") = New Newtonsoft.Json.Linq.JValue(payor)
     processing("date") = New Newtonsoft.Json.Linq.JValue(procDate)
-    processing("category") = JNull()
+    processing("category") = New Newtonsoft.Json.Linq.JValue("authorization")
     processing("processed_at") = New Newtonsoft.Json.Linq.JValue(
         System.DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"))
     processing("pipeline_version") = JStr(pipeVer)
