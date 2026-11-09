@@ -1,4 +1,4 @@
-' Client authorization JSON schema_version 2.0 (Confluence / snake_case).
+﻿' Client authorization JSON schema_version 2.0 (Confluence / snake_case).
 ' HTML-only extraction from archived AgingCares pages — no inference. Missing
 ' values null (including Confluence "R" fields); downstream IDP/MuleSoft enriches.
 ' Dates: CMIS hidden fields → US M/d + time; visible print lines → US M/d only.
@@ -595,6 +595,11 @@ Try
     Dim eligibilityReason As String = eligReasonVisible
     Dim specialInstructions As String =
         If(Not String.IsNullOrWhiteSpace(notes), notes, specialInstrVisible)
+    If specialInstructions IsNot Nothing AndAlso
+       (String.Equals(specialInstructions, "Emergency Contacts:", StringComparison.OrdinalIgnoreCase) OrElse
+        String.Equals(specialInstructions, "Emergency Contacts", StringComparison.OrdinalIgnoreCase)) Then
+        specialInstructions = Nothing
+    End If
 
     Dim authStatus As String = Nothing
 
@@ -647,15 +652,33 @@ Try
                ln.StartsWith("Service By", StringComparison.OrdinalIgnoreCase) Then
                 Exit For
             End If
+            ' Printed forms vary: "Name, daughter (Phone: …)" or "Name (Phone: …)".
             Dim em As System.Text.RegularExpressions.Match =
                 System.Text.RegularExpressions.Regex.Match(
-                    ln, "^(.+?),\s*([^(]+?)\s*\(Phone:\s*([^)]+)\)\s*$",
+                    ln, "^(.+?),\s*([^(]+?)\s*\(Phone:\s*(.+)\)\s*$",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            Dim ecName As String = Nothing
+            Dim ecRel As String = Nothing
+            Dim ecPhoneRaw As String = Nothing
             If em.Success Then
+                ecName = em.Groups(1).Value.Trim()
+                ecRel = em.Groups(2).Value.Trim()
+                ecPhoneRaw = em.Groups(3).Value
+            Else
+                em = System.Text.RegularExpressions.Regex.Match(
+                    ln, "^(.+?)\s*\(Phone:\s*(.+)\)\s*$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                If em.Success Then
+                    ecName = em.Groups(1).Value.Trim()
+                    ecPhoneRaw = em.Groups(2).Value
+                End If
+            End If
+            If Not String.IsNullOrWhiteSpace(ecName) AndAlso
+               Not String.IsNullOrWhiteSpace(ecPhoneRaw) Then
                 Dim ec As New Newtonsoft.Json.Linq.JObject()
-                ec("name") = em.Groups(1).Value.Trim()
-                ec("relationship") = em.Groups(2).Value.Trim()
-                ec("phones") = ParsePhoneList(em.Groups(3).Value)
+                ec("name") = New Newtonsoft.Json.Linq.JValue(ecName)
+                ec("relationship") = JStr(ecRel)
+                ec("phones") = ParsePhoneList(ecPhoneRaw)
                 emergencyArr.Add(ec)
             End If
         End If
